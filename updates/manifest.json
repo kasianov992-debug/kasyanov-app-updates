@@ -1,7 +1,7 @@
 {
-  "version": "1.0",
-  "released_at": "2026-10-29T06:33:35Z",
-  "notes": "Версия 1.0: автообновление, кнопка Обновить, встроенная карта (Leaflet/OSM)",
+  "version": "1.0.1",
+  "released_at": "2026-10-29T06:49:23Z",
+  "notes": "1.0.1: тайлы Esri/OpenTopoMap без Referer (file://), авто-fallback провайдеров, карта",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -19,7 +19,7 @@
   "code": {
     "js_url": "app.js",
     "css_url": "app.css",
-    "js_sha256": "a3a38d08bc81ed8043cc99dba0f99db8d877929be125f780015ff8ad5b9d94e2",
+    "js_sha256": "072b2baa304e0f10dd46a072f7ebe0683dae6dbdea74751790a9f06a365f6ecb",
     "css_sha256": "9698d64865a8dfae4980fc9a70708800b4de4bf36d779c77565da0d4f3c57477"
   },
   "data": {
