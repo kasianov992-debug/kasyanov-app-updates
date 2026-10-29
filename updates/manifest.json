@@ -1,0 +1,28 @@
+{
+  "version": "1.0",
+  "released_at": "2026-10-29T06:33:35Z",
+  "notes": "Версия 1.0: автообновление, кнопка Обновить, встроенная карта (Leaflet/OSM)",
+  "min_app": "1.0",
+  "privacy": {
+    "public": [
+      "app.js",
+      "app.css",
+      "quotes_public.json (anonymized market rates)"
+    ],
+    "not_published": [
+      "carriers (ИНН, банк, р/с)",
+      "drivers (телефоны, паспорта, адреса)",
+      "zayavki / trips",
+      "customer / stamp"
+    ]
+  },
+  "code": {
+    "js_url": "app.js",
+    "css_url": "app.css",
+    "js_sha256": "a3a38d08bc81ed8043cc99dba0f99db8d877929be125f780015ff8ad5b9d94e2",
+    "css_sha256": "9698d64865a8dfae4980fc9a70708800b4de4bf36d779c77565da0d4f3c57477"
+  },
+  "data": {
+    "quotes_url": "quotes_public.json"
+  }
+}
