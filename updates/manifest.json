@@ -1,7 +1,7 @@
 {
-  "version": "1.0.1",
-  "released_at": "2026-10-29T06:49:23Z",
-  "notes": "1.0.1: тайлы Esri/OpenTopoMap без Referer (file://), авто-fallback провайдеров, карта",
+  "version": "1.0.2",
+  "released_at": "2026-10-29T07:07:33Z",
+  "notes": "1.0.2: Удалить заявку (с tombstone, импорт не вернёт); подтверждение «Сохранить изменения?» при уходе с формы; карта без зависаний (прямые линии сразу, OSRM только по клику); исправлено масштабирование (CSS Leaflet, без перерисовки на zoom).",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -19,8 +19,8 @@
   "code": {
     "js_url": "app.js",
     "css_url": "app.css",
-    "js_sha256": "072b2baa304e0f10dd46a072f7ebe0683dae6dbdea74751790a9f06a365f6ecb",
-    "css_sha256": "9698d64865a8dfae4980fc9a70708800b4de4bf36d779c77565da0d4f3c57477"
+    "js_sha256": "61507df2568bdc695a06524ee2cf4d2eee1f257e7ee69ffc48336a748dfd2aae",
+    "css_sha256": "3928691db64a8547ad3e59046a9550df334999693c83d277e868a397481767b6"
   },
   "data": {
     "quotes_url": "quotes_public.json"

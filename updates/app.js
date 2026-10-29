@@ -46,6 +46,41 @@ function findTruckByPlate(tractor, trailer) {
     return normPlate(t.trailer_number) === tr;
   }) || null;
 }
+
+function zayavkaTombstoneKey(number, date, carrierInn, carrierName) {
+  return [String(number || ""), String(date || ""), String(carrierInn || ""), normName(carrierName || "")].join("|");
+}
+function isZayavkaDeleted(number, date, carrierInn, carrierName) {
+  if (!DB.deleted_zayavki || !DB.deleted_zayavki.length) return false;
+  const key = zayavkaTombstoneKey(number, date, carrierInn, carrierName);
+  return DB.deleted_zayavki.some(t => zayavkaTombstoneKey(t.number, t.date, t.carrier_inn, t.carrier_name) === key);
+}
+function markZayavkaDeleted(z) {
+  if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
+  const c = (z && z.carrier) || {};
+  const row = {
+    number: String(z.number || ""),
+    date: String(z.date || ""),
+    carrier_inn: String(c.inn || ""),
+    carrier_name: String(c.full_name || ""),
+    deleted_at: new Date().toISOString()
+  };
+  if (!isZayavkaDeleted(row.number, row.date, row.carrier_inn, row.carrier_name)) {
+    DB.deleted_zayavki.push(row);
+  }
+}
+function isBlankZayavka(z) {
+  if (!z) return true;
+  const has = (v) => String(v || "").trim() !== "";
+  return !has(z.number) && !has(z.loading_address) && !has(z.unloading_address) && !has(z.rate) && !has(z.driver) && !has(z.cargo)
+    && !(z.carrier && (has(z.carrier.full_name) || has(z.carrier.inn)));
+}
+function purgeBlankZayavki() {
+  if (!DB.zayavki) return 0;
+  const before = DB.zayavki.length;
+  DB.zayavki = DB.zayavki.filter(z => !isBlankZayavka(z));
+  return before - DB.zayavki.length;
+}
 function zayavkaExists(number, date, carrierInn, carrierName) {
   const num = String(number || "");
   const dt = String(date || "");
@@ -72,6 +107,7 @@ function mergeImportPack(pack) {
   if (!DB.trips) DB.trips = [];
   if (!DB.zayavki) DB.zayavki = [];
   if (!DB.quotes_extra) DB.quotes_extra = [];
+  if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
   const added = {carriers:0, drivers:0, trucks:0, trips:0, zayavki:0};
   for (const src of (pack.carriers || [])) {
     const existing = findCarrier(src.inn, src.full_name);
@@ -180,7 +216,10 @@ function mergeImportPack(pack) {
     const cSnap = src.carrier || {};
     const inn = src._carrier_inn || cSnap.inn || "";
     const found = findCarrier(inn, cSnap.full_name || src._carrier_name || "");
-    if (zayavkaExists(src.number, src.date, inn || (found && found.inn), cSnap.full_name || (found && found.full_name))) continue;
+    const cName = cSnap.full_name || (found && found.full_name) || src._carrier_name || "";
+    const cInn = inn || (found && found.inn) || "";
+    if (isZayavkaDeleted(src.number, src.date, cInn, cName)) continue;
+    if (zayavkaExists(src.number, src.date, cInn, cName)) continue;
     const carrierObj = Object.assign({
       type: "ИП", full_name: "", inn: "", kpp: "", ogrn: "", address: "",
       bik: "", bank: "", ks: "", rs: "", signatory: ""
@@ -229,7 +268,12 @@ function applyVersionedImports() {
   window.__lastImportSummary = summary;
 }
 let DB = loadStore();
+if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
 applyVersionedImports();
+(function () {
+  const n = purgeBlankZayavki();
+  if (n) saveStore(DB);
+})();
 function toast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg; t.classList.add("show");
@@ -270,13 +314,50 @@ function executorTitle(c) {
   return (c.type || "") + " " + (c.full_name || "");
 }
 let currentTab = "home", editingZayavkaId = null, previewZayavkaId = null;
+let zayavkaFormBaseline = null; // JSON snapshot after open/save; null = not on form
+let zayavkaFormSaved = true;
+function snapshotZayavkaForm() {
+  try { return JSON.stringify(readZayavkaForm()); } catch (e) { return null; }
+}
+function markZayavkaFormClean() {
+  zayavkaFormBaseline = snapshotZayavkaForm();
+  zayavkaFormSaved = true;
+}
+function isZayavkaFormDirty() {
+  if (zayavkaFormBaseline == null) return false;
+  const cur = snapshotZayavkaForm();
+  if (cur == null) return false;
+  return cur !== zayavkaFormBaseline;
+}
+function confirmLeaveZayavkaForm() {
+  if (!isZayavkaFormDirty()) return true;
+  // OK = сохранить и уйти; Cancel = остаться на форме
+  const ans = confirm("Сохранить изменения?\n\nОК — сохранить и уйти.\nОтмена — остаться в форме.");
+  if (ans) {
+    saveZayavka(false);
+    return !!zayavkaFormSaved;
+  }
+  return false;
+}
+
 document.getElementById("nav").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-tab]");
   if (!btn) return;
   showTab(btn.dataset.tab);
 });
 function showTab(tab, opts) {
-  currentTab = tab; opts = opts || {};
+  opts = opts || {};
+  // Leaving an open заявка form?
+  const leavingForm = zayavkaFormBaseline != null && !(tab === "zayavki" && (opts.mode === "new" || opts.mode === "edit"));
+  if (leavingForm) {
+    if (!confirmLeaveZayavkaForm()) return;
+    zayavkaFormBaseline = null;
+  }
+  // Destroy map when leaving Карта so DOM wipe does not leave a stale Leaflet instance
+  if (currentTab === "karta" && tab !== "karta" && typeof destroyMap === "function") {
+    try { destroyMap("karta-map"); } catch (e) {}
+  }
+  currentTab = tab;
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   const main = document.getElementById("main");
   if (tab === "home") main.innerHTML = renderHome();
@@ -325,7 +406,8 @@ function renderZayavki(opts) {
       <td>${esc(z.loading_address)} → ${esc(z.unloading_address)}</td><td>${esc(cname)}</td><td>${esc(z.rate)}</td>
       <td><button class="btn small ghost" data-view="${z.id}">Открыть</button>
         <button class="btn small ghost" data-edit="${z.id}">Изменить</button>
-        <button class="btn small ghost" data-copy="${z.id}">Копировать</button></td></tr>`;
+        <button class="btn small ghost" data-copy="${z.id}">Копировать</button>
+        <button class="btn small ghost" style="color:#b91c1c" data-del-z="${z.id}">Удалить</button></td></tr>`;
   }
   return html + `</tbody></table></div>`;
 }
@@ -348,6 +430,7 @@ function renderZayavkaForm(id) {
     <button class="btn ghost" id="btn-back-z">← К списку</button>
     <button class="btn" id="btn-save-z">Сохранить</button>
     <button class="btn secondary" id="btn-save-preview">Сохранить и открыть</button>
+    ${z.id ? `<button class="btn ghost" style="color:#b91c1c!important" id="btn-del-z">Удалить</button>` : ""}
   </div>
   <div class="card">
     <div class="row">
@@ -432,18 +515,43 @@ function readZayavkaForm() {
 }
 function saveZayavka(andPreview) {
   const z = readZayavkaForm();
-  if (!z.number) { alert("Укажите номер заявки"); return; }
+  if (!z.number) { alert("Укажите номер заявки"); zayavkaFormSaved = false; return false; }
   if (z.id) {
     const i = DB.zayavki.findIndex(x => x.id === z.id);
     if (i >= 0) DB.zayavki[i] = z;
-  } else { z.id = DB.next.zayavka++; DB.zayavki.push(z); }
+  } else {
+    // Создаём запись только при «Сохранить» — не раньше
+    z.id = DB.next.zayavka++;
+    DB.zayavki.push(z);
+  }
   if (z.carrier.full_name && z.carrier.inn) {
     let found = DB.carriers.find(c => c.inn === z.carrier.inn);
     if (found) { Object.assign(found, z.carrier); z.carrier_id = found.id; }
     else { const nc = Object.assign({id: DB.next.carrier++}, z.carrier); DB.carriers.push(nc); z.carrier_id = nc.id; }
   }
   saveStore(DB); toast("Заявка сохранена"); editingZayavkaId = z.id;
-  if (andPreview) { previewZayavkaId = z.id; showTab("zayavki", {mode:"preview", id: z.id}); }
+  zayavkaFormSaved = true;
+  markZayavkaFormClean();
+  if (andPreview) {
+    zayavkaFormBaseline = null; // leaving form for preview
+    previewZayavkaId = z.id;
+    showTab("zayavki", {mode:"preview", id: z.id});
+  }
+  return true;
+}
+function deleteZayavka(id) {
+  const z = DB.zayavki.find(x => x.id === Number(id));
+  if (!z) return;
+  const label = "№" + (z.number || z.id) + (z.carrier && z.carrier.full_name ? " · " + z.carrier.full_name : "");
+  if (!confirm("Удалить заявку " + label + "?\nИмпорт больше не добавит её снова.")) return;
+  markZayavkaDeleted(z);
+  DB.zayavki = DB.zayavki.filter(x => x.id !== z.id);
+  saveStore(DB);
+  zayavkaFormBaseline = null;
+  editingZayavkaId = null;
+  previewZayavkaId = null;
+  toast("Заявка удалена");
+  showTab("zayavki", {mode:"list"});
 }
 function fillCarrierFields(c) {
   if (!c) return;
@@ -552,6 +660,7 @@ function renderZayavkaPreview(id) {
     <button class="btn ghost" data-edit="${z.id}">Изменить</button>
     <button class="btn" id="btn-print-z">Скачать PDF</button>
     <button class="btn secondary" id="btn-word-z">Скачать Word</button>
+    <button class="btn ghost" style="color:#b91c1c!important" data-del-z="${z.id}">Удалить</button>
   </div>
   <div class="preview-frame" id="z-preview">${renderZayavkaHTML(z)}</div>
   <p class="note">«Скачать PDF» открывает печать браузера — выберите «Сохранить как PDF».</p>`;
@@ -1570,12 +1679,32 @@ function bindTabHandlers(tab) {
         document.getElementById("z-date").value = new Date().toISOString().slice(0,10);
       }, 0);
     });
+    document.querySelectorAll("[data-del-z]").forEach(b => b.onclick = () => deleteZayavka(b.dataset.delZ));
+    const bdel = document.getElementById("btn-del-z");
+    if (bdel) bdel.onclick = () => deleteZayavka(editingZayavkaId);
     const back = document.getElementById("btn-back-z");
-    if (back) back.onclick = () => { editingZayavkaId=null; previewZayavkaId=null; showTab("zayavki",{mode:"list"}); };
+    if (back) back.onclick = () => {
+      if (document.getElementById("z-number") && !confirmLeaveZayavkaForm()) return;
+      zayavkaFormBaseline = null;
+      editingZayavkaId=null; previewZayavkaId=null;
+      showTab("zayavki",{mode:"list"});
+    };
     const save = document.getElementById("btn-save-z");
     if (save) save.onclick = () => saveZayavka(false);
     const sp = document.getElementById("btn-save-preview");
     if (sp) sp.onclick = () => saveZayavka(true);
+    // Dirty tracking for form (only when form fields exist)
+    if (document.getElementById("z-number")) {
+      markZayavkaFormClean();
+      const formRoot = document.getElementById("main");
+      if (formRoot && !formRoot._zDirtyBound) {
+        formRoot.addEventListener("input", () => { if (zayavkaFormBaseline != null) zayavkaFormSaved = false; });
+        formRoot.addEventListener("change", () => { if (zayavkaFormBaseline != null) zayavkaFormSaved = false; });
+        formRoot._zDirtyBound = true;
+      }
+    } else {
+      zayavkaFormBaseline = null;
+    }
     const cf = document.getElementById("z-copy-from");
     if (cf) cf.onchange = () => { if (cf.value) applyCopyFrom(cf.value); };
     const cp = document.getElementById("z-carrier-pick");
@@ -1660,26 +1789,62 @@ function handleHash() {
   if (m) { showTab(m[1]); return true; }
   return false;
 }
-window.addEventListener("hashchange", () => { if (!handleHash()) showTab(currentTab); });
+window.addEventListener("hashchange", () => {
+  // Leaflet zoom +/- uses <a href="#"> — ignore empty hash so map is not remounted
+  const h = location.hash || "";
+  if (!h || h === "#") return;
+  if (!handleHash()) showTab(currentTab);
+});
 if (!handleHash()) showTab("home");
 
-/* === Карта (Leaflet + Esri/OTM tiles + OSRM) === */
+/* === Карта (Leaflet + Esri tiles; OSRM только по клику) === */
 const _LEAFLET_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABkAAAApCAYAAADAk4LOAAAFgUlEQVR4Aa1XA5BjWRTN2oW17d3YaZtr2962HUzbDNpjszW24mRt28p47v7zq/bXZtrp/lWnXr337j3nPCe85NcypgSFdugCpW5YoDAMRaIMqRi6aKq5E3YqDQO3qAwjVWrD8Ncq/RBpykd8oZUb/kaJutow8r1aP9II0WmLKLIsJyv1w/kqw9Ch2MYdB++12Onxee/QMwvf4/Dk/Lfp/i4nxTXtOoQ4pW5Aj7wpici1A9erdAN2OH64x8OSP9j3Ft3b7aWkTg/Fm91siTra0f9on5sQr9INejH6CUUUpavjFNq1B+Oadhxmnfa8RfEmN8VNAsQhPqF55xHkMzz3jSmChWU6f7/XZKNH+9+hBLOHYozuKQPxyMPUKkrX/K0uWnfFaJGS1QPRtZsOPtr3NsW0uyh6NNCOkU3Yz+bXbT3I8G3xE5EXLXtCXbbqwCO9zPQYPRTZ5vIDXD7U+w7rFDEoUUf7ibHIR4y6bLVPXrz8JVZEql13trxwue/uDivd3fkWRbS6/IA2bID4uk0UpF1N8qLlbBlXs4Ee7HLTfV1j54APvODnSfOWBqtKVvjgLKzF5YdEk5ewRkGlK0i33Eofffc7HT56jD7/6U+qH3Cx7SBLNntH5YIPvODnyfIXZYRVDPqgHtLs5ABHD3YzLuespb7t79FY34DjMwrVrcTuwlT55YMPvOBnRrJ4VXTdNnYug5ucHLBjEpt30701A3Ts+HEa73u6dT3FNWwflY86eMHPk+Yu+i6pzUpRrW7SNDg5JHR4KapmM5Wv2E8Tfcb1HoqqHMHU+uWDD7zg54mz5/2BSnizi9T1Dg4QQXLToGNCkb6tb1NU+QAlGr1++eADrzhn/u8Q2YZhQVlZ5+CAOtqfbhmaUCS1ezNFVm2imDbPmPng5wmz+gwh+oHDce0eUtQ6OGDIyR0uUhUsoO3vfDmmgOezH0mZN59x7MBi++WDL1g/eEiU3avlidO671bkLfwbw5XV2P8Pzo0ydy4t2/0eu33xYSOMOD8hTf4CrBtGMSoXfPLchX+J0ruSePw3LZeK0juPJbYzrhkH0io7B3k164hiGvawhOKMLkrQLyVpZg8rHFW7E2uHOL888IBPlNZ1FPzstSJM694fWr6RwpvcJK60+0HCILTBzZLFNdtAzJaohze60T8qBzyh5ZuOg5e7uwQppofEmf2++DYvmySqGBuKaicF1blQjhuHdvCIMvp8whTTfZzI7RldpwtSzL+F1+wkdZ2TBOW2gIF88PBTzD/gpeREAMEbxnJcaJHNHrpzji0gQCS6hdkEeYt9DF/2qPcEC8RM28Hwmr3sdNyht00byAut2k3gufWNtgtOEOFGUwcXWNDbdNbpgBGxEvKkOQsxivJx33iow0Vw5S6SVTrpVq11ysA2Rp7gTfPfktc6zhtXBBC+adRLshf6sG2RfHPZ5EAc4sVZ83yCN00Fk/4kggu40ZTvIEm5g24qtU4KjBrx/BTTH8ifVASAG7gKrnWxJDcU7x8X6Ecczhm3o6YicvsLXWfh3Ch1W0k8x0nXF+0fFxgt4phz8QvypiwCCFKMqXCnqXExjq10beH+UUA7+nG6mdG/Pu0f3LgFcGrl2s0kNNjpmoJ9o4B29CMO8dMT4Q5ox8uitF6fqsrJOr8qnwNbRzv6hSnG5wP+64C7h9lp30hKNtKdWjtdkbuPA19nJ7Tz3zR/ibgARbhb4AlhavcBebmTHcFl2fvYEnW0ox9xMxKBS8btJ+KiEbq9zA4RthQXDhPa0T9TEe69gWupwc6uBUphquXgf+/FrIjweHQS4/pduMe5ERUMHUd9xv8ZR98CxkS4F2n3EUrUZ10EYNw7BWm9x1GiPssi3GgiGRDKWRYZfXlON+dfNbM+GgIwYdwAAAAASUVORK5CYII=";
 const _LEAFLET_ICON_2X = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAABSCAMAAAAhFXfZAAAC91BMVEVMaXEzeak2f7I4g7g3g7cua5gzeKg8hJo3grY4g7c3grU0gLI2frE0daAubJc2gbQwd6QzeKk2gLMtd5sxdKIua5g1frA2f7IydaM0e6w2fq41fK01eqo3grgubJgta5cxdKI1f7AydaQydaMxc6EubJgvbJkwcZ4ubZkwcJwubZgubJcydqUydKIxapgubJctbJcubZcubJcvbJYubJcvbZkubJctbJctbZcubJg2f7AubJcrbZcubJcubJcua5g3grY0fq8ubJcubJdEkdEwhsw6i88vhswuhcsuhMtBjMgthMsrg8srgss6is8qgcs8i9A9iMYtg8spgcoogMo7hcMngMonf8olfso4gr8kfck5iM8jfMk4iM8he8k1fro7itAgesk2hs8eecgzfLcofssdeMg0hc4cd8g2hcsxeLQbdsgZdcgxeLImfcszhM0vda4xgckzhM4xg84wf8Yxgs4udKsvfcQucqhUndROmdM1fK0wcZ8vb5w0eqpQm9MzeKhXoNVcpdYydKNWn9VZotVKltJFjsIwcJ1Rms9OlslLmtH///8+kc9epdYzd6dbo9VHkMM2f7FHmNBClM8ydqVcpNY9hro3gLM9hLczealQmcw3fa46f7A8gLMxc6I3eagyc6FIldJMl9JSnNRSntNNl9JPnNJFi75UnM9ZodVKksg8kM45jc09e6ZHltFBk883gbRBh7pDk9EwcaBzn784g7dKkcY2i81Om9M7j85Llc81is09g7Q4grY/j9A0eqxKmdFFltBEjcXf6fFImdBCiLxJl9FGlNFBi78yiMxVndEvbpo6js74+vx+psPP3+o/ks5HkcpGmNCjwdZCkNDM3ehYoNJEls+lxNkxh8xHks0+jdC1zd5Lg6r+/v/H2ufz9/o3jM3t8/edvdM/k89Th61OiLBSjbZklbaTt9BfptdjmL1AicBHj8hGk9FAgK1dkLNTjLRekrdClc/k7fM0icy0y9tgp9c4jc2NtM9Dlc8zicxeXZn3AAAAQ3RSTlMAHDdTb4yPA+LtnEQmC4L2EmHqB7XA0d0sr478x4/Yd5i1zOfyPkf1sLVq4Nh3FvjxopQ2/STNuFzUwFIwxKaejILpIBEV9wAABhVJREFUeF6s1NdyFEcY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";
 const _LEAFLET_SHADOW = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACkAAAApCAQAAAACach9AAACMUlEQVR4Ae3ShY7jQBAE0Aoz/f9/HTMzhg1zrdKUrJbdx+Kd2nD8VNudfsL/Th///dyQN2TH6f3y/BGpC379rV+S+qqetBOxImNQXL8JCAr2V4iMQXHGNJxeCfZXhSRBcQMfvkOWUdtfzlLgAENmZDcmo2TVmt8OSM2eXxBp3DjHSMFutqS7SbmemzBiR+xpKCNUIRkdkkYxhAkyGoBvyQFEJEefwSmmvBfJuJ6aKqKWnAkvGZOaZXTUgFqYULWNSHUckZuR1HIIimUExutRxwzOLROIG4vKmCKQt364mIlhSyzAf1m9lHZHJZrlAOMMztRRiKimp/rpdJDc9Awry5xTZCte7FHtuS8wJgeYGrex28xNTd086Dik7vUMscQOa8y4DoGtCCSkAKlNwpgNtphjrC6MIHUkR6YWxxs6Sc5xqn222mmCRFzIt8lEdKx+ikCtg91qS2WpwVfBelJCiQJwvzixfI9cxZQWgiSJelKnwBElKYtDOb2MFbhmUigbReQBV0Cg4+qMXSxXSyGUn4UbF8l+7qdSGnTC0XLCmahIgUHLhLOhpVCtw4CzYXvLQWQbJNmxoCsOKAxSgBJno75avolkRw8iIAFcsdc02e9iyCd8tHwmeSSoKTowIgvscSGZUOA7PuCN5b2BX9mQM7S0wYhMNU74zgsPBj3HU7wguAfnxxjFQGBE6pwN+GjME9zHY7zGp8wVxMShYX9NXvEWD3HbwJf4giO4CFIQxXScH1/TM+04kkBiAAAAAElFTkSuQmCC";
 const OSRM_URL = "https://router.project-osrm.org/route/v1/driving/";
+const TILE_ERROR_SWITCH_THRESHOLD = 4;
+const TILE_PROVIDERS = [
+  {
+    id: "esri",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    options: {
+      maxZoom: 19,
+      attribution: 'Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Esri, DeLorme, NAVTEQ'
+    }
+  },
+  {
+    id: "opentopomap",
+    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 17, subdomains: "abc",
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> | &copy; <a href="https://opentopomap.org">OpenTopoMap</a>'
+    }
+  },
+  {
+    id: "osmfr",
+    url: "https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
+    options: {
+      maxZoom: 20, subdomains: "abc",
+      attribution: '&copy; <a href="https://www.openstreetmap.fr/">OSM France</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+    }
+  }
+];
 let _mapInstances = {};
+let _mapLayerGroups = {}; // containerId -> featureGroup of routes
+let _mapItemLayers = {};  // itemId -> {line,m1,m2,group,item,path}
 let _mapSelectedId = null;
+let _preferredTileProviderIdx = 0;
+let _kartaInited = false;
+let _kartaUserZoomed = false;
+let _kartaPaintGen = 0;
+let _osrmCache = {}; // "from|to" -> {latlngs, km, source}
+let _osrmInflight = 0;
 
-function leafletReady() {
-  return typeof L !== "undefined";
-}
+function leafletReady() { return typeof L !== "undefined"; }
 function setupLeafletIcons() {
   if (!leafletReady() || L.Icon.Default.prototype._ipkFixed) return;
   L.Icon.Default.mergeOptions({
-    iconUrl: _LEAFLET_ICON,
-    iconRetinaUrl: _LEAFLET_ICON_2X,
-    shadowUrl: _LEAFLET_SHADOW
+    iconUrl: _LEAFLET_ICON, iconRetinaUrl: _LEAFLET_ICON_2X, shadowUrl: _LEAFLET_SHADOW
   });
   L.Icon.Default.prototype._ipkFixed = true;
 }
@@ -1688,77 +1853,27 @@ function mapOnline() {
 }
 function destroyMap(id) {
   const m = _mapInstances[id];
-  if (m) {
-    try { m.remove(); } catch (e) {}
-    delete _mapInstances[id];
-  }
+  if (m) { try { m.remove(); } catch (e) {} delete _mapInstances[id]; }
+  delete _mapLayerGroups[id];
+  if (id === "karta-map") { _kartaInited = false; _mapItemLayers = {}; }
 }
-/* Tile providers that work without Referer (file://). OSM.org often returns "Access blocked". */
-const TILE_PROVIDERS = [
-  {
-    id: "esri",
-    // Note: Esri uses {z}/{y}/{x} order
-    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-    options: {
-      maxZoom: 19,
-      attribution: 'Tiles &copy; <a href="https://www.esri.com/">Esri</a> &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom'
-    }
-  },
-  {
-    id: "opentopomap",
-    url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
-    options: {
-      maxZoom: 17,
-      subdomains: "abc",
-      attribution: 'Map data: &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, SRTM | Map style: &copy; <a href="https://opentopomap.org">OpenTopoMap</a> (CC-BY-SA)'
-    }
-  },
-  {
-    id: "osmfr",
-    url: "https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
-    options: {
-      maxZoom: 20,
-      subdomains: "abc",
-      attribution: '&copy; <a href="https://www.openstreetmap.fr/">OpenStreetMap France</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-    }
-  },
-  {
-    id: "osm",
-    url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-    options: {
-      maxZoom: 19,
-      subdomains: "abc",
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-    }
-  }
-];
-const TILE_ERROR_SWITCH_THRESHOLD = 3;
-let _preferredTileProviderIdx = 0;
-
 function attachTileLayer(map, containerId, providerIdx) {
   const prov = TILE_PROVIDERS[providerIdx];
   if (!prov) return null;
-  const layer = L.tileLayer(prov.url, Object.assign({}, prov.options));
-  let errCount = 0;
-  let switched = false;
-  let loadCount = 0;
-  layer.on("tileload", () => { loadCount++; errCount = Math.max(0, errCount - 1); });
+  if (map._ipkTileLayer) { try { map.removeLayer(map._ipkTileLayer); } catch (e) {} }
+  const layer = L.tileLayer(prov.url, Object.assign({ updateWhenZooming: true, keepBuffer: 2 }, prov.options));
+  let errCount = 0, switched = false;
   layer.on("tileerror", () => {
     errCount++;
-    if (!switched && errCount >= TILE_ERROR_SWITCH_THRESHOLD) {
-      switched = true;
-      const next = providerIdx + 1;
-      if (next < TILE_PROVIDERS.length) {
-        try { map.removeLayer(layer); } catch (e) {}
-        _preferredTileProviderIdx = next;
-        attachTileLayer(map, containerId, next);
-      } else {
-        const banner = document.getElementById(containerId + "-offline");
-        if (banner) {
-          banner.hidden = false;
-          banner.textContent = "Карта требует интернет";
-        }
-      }
+    if (switched || errCount < TILE_ERROR_SWITCH_THRESHOLD) return;
+    switched = true;
+    const next = providerIdx + 1;
+    if (next < TILE_PROVIDERS.length) {
+      _preferredTileProviderIdx = next;
+      attachTileLayer(map, containerId, next);
+    } else {
+      const banner = document.getElementById(containerId + "-offline");
+      if (banner) { banner.hidden = false; banner.textContent = "Карта требует интернет"; }
     }
   });
   layer.addTo(map);
@@ -1766,19 +1881,51 @@ function attachTileLayer(map, containerId, providerIdx) {
   map._ipkTileLayer = layer;
   return layer;
 }
-function createMap(containerId, opts) {
+/** Create once per container; reuse on tab re-entry. */
+function ensureMap(containerId, opts) {
   opts = opts || {};
-  destroyMap(containerId);
   const el = document.getElementById(containerId);
   if (!el || !leafletReady()) return null;
   setupLeafletIcons();
-  const map = L.map(el, { zoomControl: true, attributionControl: true });
-  const startIdx = Math.min(_preferredTileProviderIdx, TILE_PROVIDERS.length - 1);
-  attachTileLayer(map, containerId, startIdx);
+  let map = _mapInstances[containerId];
+  if (map && map.getContainer && map.getContainer() === el) {
+    setTimeout(() => { try { map.invalidateSize({ animate: false }); } catch (e) {} }, 50);
+    setTimeout(() => { try { map.invalidateSize({ animate: false }); } catch (e) {} }, 250);
+    return map;
+  }
+  destroyMap(containerId);
+  map = L.map(el, {
+    zoomControl: true,
+    attributionControl: true,
+    scrollWheelZoom: true,
+    doubleClickZoom: true,
+    boxZoom: true,
+    keyboard: true,
+    touchZoom: true,
+    dragging: true,
+    zoomSnap: 0.5,
+    zoomDelta: 0.5
+  });
+  attachTileLayer(map, containerId, Math.min(_preferredTileProviderIdx, TILE_PROVIDERS.length - 1));
   map.setView(opts.center || [55.75, 37.62], opts.zoom || 5);
   _mapInstances[containerId] = map;
-  setTimeout(() => { try { map.invalidateSize(); } catch (e) {} }, 80);
+  _mapLayerGroups[containerId] = L.featureGroup().addTo(map);
+  // Prevent zoom control <a href="#"> from touching location.hash (would remount the tab)
+  try {
+    const zc = map.zoomControl && map.zoomControl._container;
+    if (zc) zc.querySelectorAll("a").forEach(a => { a.setAttribute("href", "javascript:void(0)"); a.addEventListener("click", ev => { ev.preventDefault(); }); });
+  } catch (e) {}
+  map.on("zoomstart", () => { _kartaUserZoomed = true; });
+  map.on("dragstart", () => { _kartaUserZoomed = true; });
+  // zoom must NOT redraw routes or fetch OSRM
+  setTimeout(() => { try { map.invalidateSize({ animate: false }); } catch (e) {} }, 60);
+  setTimeout(() => { try { map.invalidateSize({ animate: false }); } catch (e) {} }, 300);
   return map;
+}
+function createMap(containerId, opts) {
+  // stavki panel: always fresh (container rebuilt)
+  destroyMap(containerId);
+  return ensureMap(containerId, opts);
 }
 function parseRouteEndpoints(routeStr) {
   const s = String(routeStr || "").trim();
@@ -1788,14 +1935,11 @@ function parseRouteEndpoints(routeStr) {
   return null;
 }
 function endpointsForZayavka(z) {
-  const from = z.loading_address || "";
-  const to = z.unloading_address || "";
+  const from = z.loading_address || "", to = z.unloading_address || "";
   if (from && to) return { from, to };
   return parseRouteEndpoints([from, to].filter(Boolean).join(" → "));
 }
-function endpointsForTrip(t) {
-  return parseRouteEndpoints(t.route || "");
-}
+function endpointsForTrip(t) { return parseRouteEndpoints(t.route || ""); }
 function formatMapRate(v) {
   if (v == null || v === "") return "—";
   if (typeof formatTripRate === "function") return formatTripRate(v);
@@ -1803,50 +1947,49 @@ function formatMapRate(v) {
   if (!isNaN(n) && n > 0) return money(n) + " ₽";
   return String(v);
 }
+function straightPath(fromName, toName) {
+  const a = resolveCity(fromName), b = resolveCity(toName);
+  if (!a || !b) return { ok: false, unknown: [!a && fromName, !b && toName].filter(Boolean) };
+  const km = haversineKm(a.coords, b.coords) * 1.2;
+  return {
+    ok: true, fromKey: a.key, toKey: b.key,
+    fromCoords: a.coords, toCoords: b.coords,
+    latlngs: [a.coords, b.coords], km, source: "straight"
+  };
+}
 async function fetchOsrmLatLngs(a, b) {
-  // a,b are [lat,lon]
   const url = OSRM_URL + a[1] + "," + a[0] + ";" + b[1] + "," + b[0] + "?overview=full&geometries=geojson";
   const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
-  const timer = ctrl ? setTimeout(() => ctrl.abort(), 8000) : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
   try {
     const r = await fetch(url, { mode: "cors", signal: ctrl ? ctrl.signal : undefined });
     if (!r.ok) throw new Error("osrm " + r.status);
     const data = await r.json();
     const route = data.routes && data.routes[0];
     if (!route || !route.geometry || !route.geometry.coordinates) throw new Error("no geom");
-    const latlngs = route.geometry.coordinates.map(c => [c[1], c[0]]);
-    return { latlngs, km: (route.distance || 0) / 1000, source: "osrm" };
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
+    return { latlngs: route.geometry.coordinates.map(c => [c[1], c[0]]), km: (route.distance || 0) / 1000, source: "osrm" };
+  } finally { if (timer) clearTimeout(timer); }
 }
-async function resolveRoutePath(fromName, toName) {
-  const a = resolveCity(fromName), b = resolveCity(toName);
-  if (!a || !b) {
-    return { ok: false, unknown: [!a && fromName, !b && toName].filter(Boolean) };
+async function resolveRoutePath(fromName, toName, opts) {
+  opts = opts || {};
+  const preferOsrm = !!opts.osrm;
+  const key = String(fromName) + "|" + String(toName);
+  const base = straightPath(fromName, toName);
+  if (!base.ok) return base;
+  if (!preferOsrm || !mapOnline()) return base;
+  if (_osrmCache[key]) {
+    return Object.assign({}, base, _osrmCache[key], { ok: true, fromKey: base.fromKey, toKey: base.toKey, fromCoords: base.fromCoords, toCoords: base.toCoords });
   }
-  const straightKm = haversineKm(a.coords, b.coords) * 1.2;
-  const fallback = {
-    ok: true,
-    fromKey: a.key, toKey: b.key,
-    fromCoords: a.coords, toCoords: b.coords,
-    latlngs: [a.coords, b.coords],
-    km: straightKm,
-    source: "straight"
-  };
-  if (!mapOnline()) return fallback;
+  if (_osrmInflight >= 2) return base;
+  _osrmInflight++;
   try {
-    const osrm = await fetchOsrmLatLngs(a.coords, b.coords);
-    return {
-      ok: true,
-      fromKey: a.key, toKey: b.key,
-      fromCoords: a.coords, toCoords: b.coords,
-      latlngs: osrm.latlngs,
-      km: osrm.km || straightKm,
-      source: "osrm"
-    };
+    const osrm = await fetchOsrmLatLngs(base.fromCoords, base.toCoords);
+    _osrmCache[key] = osrm;
+    return Object.assign({}, base, osrm);
   } catch (e) {
-    return fallback;
+    return base;
+  } finally {
+    _osrmInflight = Math.max(0, _osrmInflight - 1);
   }
 }
 function collectMapItems() {
@@ -1855,30 +1998,20 @@ function collectMapItems() {
     const ep = endpointsForZayavka(z);
     if (!ep) continue;
     items.push({
-      id: "z-" + z.id,
-      kind: "zayavka",
-      title: "Заявка №" + (z.number || z.id),
-      from: ep.from, to: ep.to,
-      date: z.date || z.created_at || "",
-      driver: z.driver || "",
-      rate: z.rate,
-      carrier: (z.carrier && z.carrier.full_name) || "",
-      raw: z
+      id: "z-" + z.id, kind: "zayavka", title: "Заявка №" + (z.number || z.id),
+      from: ep.from, to: ep.to, date: z.date || z.created_at || "",
+      driver: z.driver || "", rate: z.rate,
+      carrier: (z.carrier && z.carrier.full_name) || "", raw: z
     });
   }
   for (const t of (DB.trips || [])) {
     const ep = endpointsForTrip(t);
     if (!ep) continue;
     items.push({
-      id: "t-" + t.id,
-      kind: "trip",
-      title: "Рейс " + (t.client || t.id),
-      from: ep.from, to: ep.to,
-      date: t.date || "",
-      driver: t.driver || t.carrier || "",
-      rate: t.client_rate || t.carrier_rate || "",
-      carrier: t.carrier || "",
-      raw: t
+      id: "t-" + t.id, kind: "trip", title: "Рейс " + (t.client || t.id),
+      from: ep.from, to: ep.to, date: t.date || "",
+      driver: t.driver || t.carrier || "", rate: t.client_rate || t.carrier_rate || "",
+      carrier: t.carrier || "", raw: t
     });
   }
   items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
@@ -1886,42 +2019,115 @@ function collectMapItems() {
 }
 function popupHtml(item, path) {
   const km = path && path.km ? (" · ≈" + Math.round(path.km) + " км") : "";
-  const src = path && path.source === "osrm" ? " (по дорогам)" : (path && path.source === "straight" ? " (оценка)" : "");
+  const src = path && path.source === "osrm" ? " (по дорогам)" : " (оценка)";
   return `<strong>${esc(item.title)}</strong><br>
     ${esc(item.from)} → ${esc(item.to)}${km}${src}<br>
     Дата: <strong>${esc(fmtDate(item.date))}</strong><br>
     Водитель: <strong>${esc(item.driver || "—")}</strong><br>
     Ставка: <strong>${esc(formatMapRate(item.rate))}</strong>` +
-    (item.carrier ? `<br>Перевозчик: ${esc(item.carrier)}` : "");
+    (item.carrier ? `<br>Перевозчик: ${esc(item.carrier)}` : "") +
+    `<br><span class="muted">Клик по линии — маршрут по дорогам</span>`;
 }
-async function drawItemOnMap(map, item, opts) {
+function clearRouteLayers(containerId) {
+  const g = _mapLayerGroups[containerId];
+  if (g) g.clearLayers();
+  if (containerId === "karta-map") _mapItemLayers = {};
+}
+function drawStraightItem(map, containerId, item, opts) {
   opts = opts || {};
-  const path = await resolveRoutePath(item.from, item.to);
+  const path = straightPath(item.from, item.to);
   if (!path.ok) return null;
   const color = item.kind === "trip" ? "#2563eb" : "#059669";
+  const selected = opts.selected || _mapSelectedId === item.id;
   const line = L.polyline(path.latlngs, {
-    color: color,
-    weight: opts.selected ? 6 : 4,
-    opacity: opts.selected ? 0.95 : 0.7
-  }).addTo(map);
-  const m1 = L.marker(path.fromCoords).addTo(map);
-  const m2 = L.marker(path.toCoords).addTo(map);
+    color, weight: selected ? 6 : 4, opacity: selected ? 0.95 : 0.75,
+    interactive: true
+  });
+  const m1 = L.marker(path.fromCoords);
+  const m2 = L.marker(path.toCoords);
   const html = popupHtml(item, path);
   line.bindPopup(html); m1.bindPopup(html); m2.bindPopup(html);
-  if (opts.open) line.openPopup();
-  return { line, m1, m2, path, group: L.featureGroup([line, m1, m2]) };
+  const group = L.featureGroup([line, m1, m2]);
+  const host = _mapLayerGroups[containerId];
+  if (host) host.addLayer(group); else group.addTo(map);
+  const rec = { line, m1, m2, group, item, path };
+  _mapItemLayers[item.id] = rec;
+  line.on("click", () => { selectMapItem(item.id, { osrm: true }); });
+  m1.on("click", () => { selectMapItem(item.id, { osrm: true }); });
+  m2.on("click", () => { selectMapItem(item.id, { osrm: true }); });
+  if (opts.open) setTimeout(() => { try { line.openPopup(); } catch (e) {} }, 0);
+  return rec;
+}
+async function upgradeItemToOsrm(itemId) {
+  const rec = _mapItemLayers[itemId];
+  if (!rec) return;
+  const item = rec.item;
+  const path = await resolveRoutePath(item.from, item.to, { osrm: true });
+  if (!path.ok || path.source !== "osrm") return;
+  rec.path = path;
+  rec.line.setLatLngs(path.latlngs);
+  const html = popupHtml(item, path);
+  rec.line.setPopupContent(html);
+  rec.m1.setPopupContent(html);
+  rec.m2.setPopupContent(html);
+  try { rec.line.openPopup(); } catch (e) {}
+  const map = _mapInstances["karta-map"];
+  if (map) {
+    try { map.fitBounds(rec.line.getBounds().pad(0.2), { animate: true, maxZoom: 10 }); } catch (e) {}
+  }
+}
+function mapFilters() {
+  const showZ = document.getElementById("map-show-z")?.checked !== false;
+  const showT = document.getElementById("map-show-t")?.checked !== false;
+  const carrier = (document.getElementById("map-filter-carrier")?.value || "").trim();
+  const period = (document.getElementById("map-filter-period")?.value || "").trim(); // YYYY-MM or empty
+  return { showZ, showT, carrier, period };
+}
+function itemMatchesFilters(item, f) {
+  if (item.kind === "zayavka" && !f.showZ) return false;
+  if (item.kind === "trip" && !f.showT) return false;
+  if (f.carrier && normName(item.carrier || "") !== normName(f.carrier) &&
+      !normName(item.carrier || "").includes(normName(f.carrier))) return false;
+  if (f.period && !(String(item.date || "").startsWith(f.period))) return false;
+  return true;
+}
+function uniqueCarriers(items) {
+  const set = {};
+  for (const it of items) {
+    const c = (it.carrier || "").trim();
+    if (c) set[c] = 1;
+  }
+  return Object.keys(set).sort((a, b) => a.localeCompare(b, "ru"));
 }
 function renderKarta() {
   const online = mapOnline();
+  const items = collectMapItems();
+  const carriers = uniqueCarriers(items);
+  const months = [...new Set(items.map(i => String(i.date || "").slice(0, 7)).filter(m => m.length === 7))].sort().reverse();
   return `<h1>Карта</h1>
   <div class="warn-box">${online
-    ? "Маршруты заявок и рейсов. Тайлы карты и построение по дорогам требуют интернет."
-    : "Карта требует интернет — показаны только сохранённые координаты городов, тайлы недоступны офлайн."}</div>
+    ? "Линии сразу по прямой (оценка). По клику на маршрут — уточнение по дорогам (OSRM). Масштаб: колёсико / кнопки +/−."
+    : "Карта требует интернет — тайлы недоступны офлайн."}</div>
   <div class="map-toolbar">
-    <label class="check"><input type="checkbox" id="map-show-z" checked> Заявки</label>
-    <label class="check"><input type="checkbox" id="map-show-t" checked> Рейсы</label>
-    <button class="btn secondary" id="btn-map-fit">Показать все</button>
+    <label class="check"><input type="checkbox" id="map-show-z" checked> Заявки <span class="map-leg map-leg-z"></span></label>
+    <label class="check"><input type="checkbox" id="map-show-t" checked> Рейсы <span class="map-leg map-leg-t"></span></label>
+    <label>Перевозчик
+      <select id="map-filter-carrier"><option value="">Все</option>
+        ${carriers.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("")}
+      </select>
+    </label>
+    <label>Период
+      <select id="map-filter-period"><option value="">Все</option>
+        ${months.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("")}
+      </select>
+    </label>
+    <button class="btn secondary" id="btn-map-fit" type="button">Показать все</button>
     <span class="muted" id="map-status"></span>
+  </div>
+  <div class="map-legend card" style="padding:8px 12px;margin-bottom:8px">
+    <span class="map-leg map-leg-z"></span> Заявки &nbsp;&nbsp;
+    <span class="map-leg map-leg-t"></span> Рейсы &nbsp;&nbsp;
+    <span class="muted">Клик по линии — попап (водитель, дата, ставка) и маршрут по дорогам</span>
   </div>
   <div class="card" style="padding:0;overflow:hidden">
     <div class="map-wrap tall" id="karta-map-wrap">
@@ -1934,31 +2140,23 @@ function renderKarta() {
     <div class="map-list" id="map-list"></div>
   </div>`;
 }
-async function refreshKartaMap() {
-  if (!leafletReady()) {
-    const st = document.getElementById("map-status");
-    if (st) st.textContent = "Leaflet не загружен";
-    return;
-  }
-  const showZ = document.getElementById("map-show-z")?.checked !== false;
-  const showT = document.getElementById("map-show-t")?.checked !== false;
-  const listEl = document.getElementById("map-list");
-  const status = document.getElementById("map-status");
+function paintKartaRoutes(opts) {
+  opts = opts || {};
+  const t0 = performance.now();
+  const map = ensureMap("karta-map", { center: [55.0, 40.0], zoom: 5 });
+  if (!map) return;
   const offline = document.getElementById("karta-map-offline");
   if (offline) offline.hidden = mapOnline();
-
-  const map = createMap("karta-map", { center: [55.0, 40.0], zoom: 5 });
-  if (!map) return;
-
-  const items = collectMapItems().filter(it =>
-    (it.kind === "zayavka" && showZ) || (it.kind === "trip" && showT)
-  );
-  const layers = [];
+  const f = mapFilters();
+  const listEl = document.getElementById("map-list");
+  const status = document.getElementById("map-status");
+  clearRouteLayers("karta-map");
+  const items = collectMapItems().filter(it => itemMatchesFilters(it, f));
   let drawn = 0, skipped = 0;
   if (listEl) listEl.innerHTML = "";
+  // Sync straight lines only — never await OSRM here (freeze fix)
   for (const item of items) {
-    const a = resolveCity(item.from), b = resolveCity(item.to);
-    const canPlot = !!(a && b);
+    const canPlot = !!(resolveCity(item.from) && resolveCity(item.to));
     if (listEl) {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -1966,33 +2164,70 @@ async function refreshKartaMap() {
       btn.dataset.mapId = item.id;
       btn.innerHTML = `<strong>${esc(item.title)}</strong> · ${esc(fmtDate(item.date))}
         <div>${esc(item.from)} → ${esc(item.to)}</div>
-        <div class="meta">Водитель: ${esc(item.driver || "—")} · Ставка: ${esc(formatMapRate(item.rate))}${canPlot ? "" : " · <span style=color:#b45309>город не в таблице</span>"}</div>`;
-      btn.onclick = () => selectMapItem(item.id);
+        <div class="meta">Водитель: ${esc(item.driver || "—")} · Ставка: ${esc(formatMapRate(item.rate))} · ${esc(item.carrier || "")}${canPlot ? "" : " · <span style=color:#b45309>нет координат</span>"}</div>`;
+      btn.onclick = () => selectMapItem(item.id, { osrm: true });
       listEl.appendChild(btn);
     }
     if (!canPlot) { skipped++; continue; }
-    const drawnItem = await drawItemOnMap(map, item, { selected: _mapSelectedId === item.id, open: _mapSelectedId === item.id });
-    if (drawnItem) { layers.push(drawnItem.group); drawn++; }
+    const rec = drawStraightItem(map, "karta-map", item, {
+      selected: _mapSelectedId === item.id,
+      open: _mapSelectedId === item.id
+    });
+    if (rec) drawn++;
   }
-  if (layers.length) {
-    const g = L.featureGroup(layers);
-    try { map.fitBounds(g.getBounds().pad(0.15)); } catch (e) {}
+  const g = _mapLayerGroups["karta-map"];
+  // Never steal zoom from the user. Callers that want a refit must clear _kartaUserZoomed first.
+  if (!_kartaUserZoomed && g && drawn) {
+    try { map.fitBounds(g.getBounds().pad(0.15), { animate: false, maxZoom: 8 }); } catch (e) {}
   }
-  if (status) status.textContent = `На карте: ${drawn}` + (skipped ? ` · без координат: ${skipped}` : "");
-  window._kartaLayers = layers;
+  try { map.invalidateSize({ animate: false }); } catch (e) {}
+  const ms = Math.round(performance.now() - t0);
+  if (status) status.textContent = `На карте: ${drawn}` + (skipped ? ` · без координат: ${skipped}` : "") + ` · ${ms} мс`;
+  _kartaInited = true;
 }
-async function selectMapItem(id) {
+async function selectMapItem(id, opts) {
+  opts = opts || {};
   _mapSelectedId = id;
-  await refreshKartaMap();
+  // highlight without full rebuild if possible
+  for (const [iid, rec] of Object.entries(_mapItemLayers)) {
+    const sel = iid === id;
+    try { rec.line.setStyle({ weight: sel ? 6 : 4, opacity: sel ? 0.95 : 0.75 }); } catch (e) {}
+  }
+  document.querySelectorAll("#map-list .map-item").forEach(el => {
+    el.classList.toggle("active", el.dataset.mapId === id);
+  });
+  if (opts.osrm) await upgradeItemToOsrm(id);
+  else {
+    const rec = _mapItemLayers[id];
+    if (rec) try { rec.line.openPopup(); } catch (e) {}
+  }
 }
 function bindKartaHandlers() {
-  const z = document.getElementById("map-show-z");
-  const t = document.getElementById("map-show-t");
-  if (z) z.onchange = () => refreshKartaMap();
-  if (t) t.onchange = () => refreshKartaMap();
+  ["map-show-z", "map-show-t", "map-filter-carrier", "map-filter-period"].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.onchange = () => {
+      _kartaUserZoomed = false;
+      paintKartaRoutes();
+    };
+  });
   const fit = document.getElementById("btn-map-fit");
-  if (fit) fit.onclick = () => refreshKartaMap();
-  refreshKartaMap();
+  if (fit) fit.onclick = () => {
+    _mapSelectedId = null;
+    _kartaUserZoomed = false;
+    paintKartaRoutes();
+  };
+  // Defer paint so layout/CSS settle (zoom + invalidateSize)
+  const gen = ++_kartaPaintGen;
+  if (!_kartaInited) _kartaUserZoomed = false;
+  requestAnimationFrame(() => {
+    if (gen !== _kartaPaintGen) return;
+    paintKartaRoutes();
+    setTimeout(() => {
+      if (gen !== _kartaPaintGen) return;
+      const map = _mapInstances["karta-map"];
+      if (map) try { map.invalidateSize({ animate: false }); } catch (e) {}
+    }, 200);
+  });
 }
 
 async function renderStavkiMapPanel(from, to) {
@@ -2008,7 +2243,7 @@ async function renderStavkiMapPanel(from, to) {
   const online = mapOnline();
   card.innerHTML = `<h2>Карта маршрута</h2>
     <p class="muted" id="stavki-map-meta">Считаю маршрут…</p>
-    <div class="map-wrap">
+    <div class="map-wrap" id="stavki-map-wrap">
       <div id="stavki-map" style="height:100%;width:100%"></div>
       <div class="map-offline" id="stavki-map-offline" ${online ? "hidden" : ""}>Карта требует интернет</div>
     </div>`;
@@ -2016,20 +2251,30 @@ async function renderStavkiMapPanel(from, to) {
     document.getElementById("stavki-map-meta").textContent = "Карта недоступна";
     return;
   }
-  const path = await resolveRoutePath(from, to);
+  // Draw straight immediately, then optionally upgrade OSRM
+  const straight = straightPath(from, to);
   const meta = document.getElementById("stavki-map-meta");
-  if (!path.ok) {
-    meta.textContent = "Не знаю координаты: " + (path.unknown || []).join(", ");
+  if (!straight.ok) {
+    meta.textContent = "Не знаю координаты: " + (straight.unknown || []).join(", ");
     return;
   }
-  const srcLabel = path.source === "osrm" ? "по дорогам (OSRM)" : "прямая × 1.2 (оценка)";
-  meta.textContent = `${path.fromKey} → ${path.toKey} · ≈${Math.round(path.km)} км · ${srcLabel}`;
-  const map = createMap("stavki-map", { center: path.fromCoords, zoom: 6 });
+  meta.textContent = `${straight.fromKey} → ${straight.toKey} · ≈${Math.round(straight.km)} км · оценка (прямая × 1.2)`;
+  const map = createMap("stavki-map", { center: straight.fromCoords, zoom: 6 });
   if (!map) return;
-  const line = L.polyline(path.latlngs, { color: "#7c3aed", weight: 5, opacity: 0.9 }).addTo(map);
-  L.marker(path.fromCoords).addTo(map).bindPopup("Откуда: " + esc(from));
-  L.marker(path.toCoords).addTo(map).bindPopup("Куда: " + esc(to));
-  try { map.fitBounds(line.getBounds().pad(0.2)); } catch (e) {}
+  let line = L.polyline(straight.latlngs, { color: "#7c3aed", weight: 5, opacity: 0.9 }).addTo(map);
+  L.marker(straight.fromCoords).addTo(map).bindPopup("Откуда: " + esc(from));
+  L.marker(straight.toCoords).addTo(map).bindPopup("Куда: " + esc(to));
+  try { map.fitBounds(line.getBounds().pad(0.2), { animate: false, maxZoom: 9 }); } catch (e) {}
+  setTimeout(() => { try { map.invalidateSize({ animate: false }); map.fitBounds(line.getBounds().pad(0.2), { animate: false, maxZoom: 9 }); } catch (e) {} }, 120);
   const off = document.getElementById("stavki-map-offline");
   if (off) off.hidden = mapOnline();
+  // Background OSRM — does not block UI
+  try {
+    const path = await resolveRoutePath(from, to, { osrm: true });
+    if (path.ok && path.source === "osrm" && _mapInstances["stavki-map"] === map) {
+      line.setLatLngs(path.latlngs);
+      meta.textContent = `${path.fromKey} → ${path.toKey} · ≈${Math.round(path.km)} км · по дорогам (OSRM)`;
+      try { map.fitBounds(line.getBounds().pad(0.2), { animate: true, maxZoom: 9 }); } catch (e) {}
+    }
+  } catch (e) {}
 }

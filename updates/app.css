@@ -96,15 +96,28 @@ body.print-mode #print-root{display:block!important}
 .top .upd .upd-status.warn{color:#fde68a}
 .top .upd .upd-status.err{color:#fecaca}
 
-/* Map */
-.map-wrap{position:relative;height:420px;border-radius:12px;overflow:hidden;border:1px solid var(--border,#e5e7eb);background:#e8eef5}
+/* Map — no transform/zoom on parents; fixed height so Leaflet invalidateSize works */
+.map-wrap{
+  position:relative;height:420px;border-radius:12px;overflow:hidden;
+  border:1px solid var(--border,#e5e7eb);background:#e8eef5;
+  transform:none!important;zoom:normal!important;
+  -webkit-transform:none!important;
+}
 .map-wrap.tall{height:560px}
+.map-wrap #karta-map,.map-wrap #stavki-map,
+.map-wrap .leaflet-container{
+  position:absolute!important;inset:0!important;height:100%!important;width:100%!important;
+  font:inherit;z-index:1;touch-action:pan-x pan-y;
+}
 .map-offline{
   position:absolute;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;
   background:rgba(15,23,42,.72);color:#fff;font-weight:600;text-align:center;padding:16px;
+  pointer-events:none;
 }
 .map-offline[hidden]{display:none!important}
 .map-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:10px 0}
+.map-toolbar label{font-size:.9rem}
+.map-toolbar select{max-width:220px}
 .map-list{max-height:280px;overflow:auto;margin-top:12px}
 .map-list .map-item{
   display:block;width:100%;text-align:left;border:1px solid var(--border,#e5e7eb);background:#fff;
@@ -113,4 +126,9 @@ body.print-mode #print-root{display:block!important}
 .map-list .map-item:hover,.map-list .map-item.active{border-color:#2563eb;background:#eff6ff}
 .map-list .map-item .meta{font-size:.85rem;opacity:.8;margin-top:4px}
 #stavki-map-card{margin-top:14px}
-.leaflet-container{font:inherit}
+.map-leg{display:inline-block;width:18px;height:4px;border-radius:2px;vertical-align:middle;margin-right:4px}
+.map-leg-z{background:#059669}
+.map-leg-t{background:#2563eb}
+/* Leaflet zoom controls must stay clickable above tiles */
+.leaflet-control-zoom a{line-height:26px!important}
+.leaflet-container{font:inherit;background:#e8eef5}
