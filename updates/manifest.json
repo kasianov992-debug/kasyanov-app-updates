@@ -1,13 +1,14 @@
 {
-  "version": "1.0.2",
-  "released_at": "2026-10-29T07:07:33Z",
-  "notes": "1.0.2: Удалить заявку (с tombstone, импорт не вернёт); подтверждение «Сохранить изменения?» при уходе с формы; карта без зависаний (прямые линии сразу, OSRM только по клику); исправлено масштабирование (CSS Leaflet, без перерисовки на zoom).",
+  "version": "1.0.3",
+  "released_at": "2026-10-29T07:32:25Z",
+  "notes": "1.0.3: Яндекс.Карты, вкладка Почта/Главное (новые запросы), машины у перевозчиков, правка рейсов и маржа вручную",
   "min_app": "1.0",
   "privacy": {
     "public": [
       "app.js",
       "app.css",
-      "quotes_public.json (anonymized market rates)"
+      "quotes_public.json (anonymized market rates)",
+      "mail_public.json (sanitized requests)"
     ],
     "not_published": [
       "carriers (ИНН, банк, р/с)",
@@ -19,10 +20,11 @@
   "code": {
     "js_url": "app.js",
     "css_url": "app.css",
-    "js_sha256": "61507df2568bdc695a06524ee2cf4d2eee1f257e7ee69ffc48336a748dfd2aae",
-    "css_sha256": "3928691db64a8547ad3e59046a9550df334999693c83d277e868a397481767b6"
+    "js_sha256": "4f707b70b71f38274f05c311d100901624cee1279f53e9792d08b1f0f0e16d20",
+    "css_sha256": "e951247a124f00710f718511ea121d7b06b7f3518d898a9289b14cdfe55cd21b"
   },
   "data": {
-    "quotes_url": "quotes_public.json"
+    "quotes_url": "quotes_public.json",
+    "mail_url": "mail_public.json"
   }
 }

@@ -132,3 +132,13 @@ body.print-mode #print-root{display:block!important}
 /* Leaflet zoom controls must stay clickable above tiles */
 .leaflet-control-zoom a{line-height:26px!important}
 .leaflet-container{font:inherit;background:#e8eef5}
+
+.mail-item{margin:10px 0;padding:12px 14px}
+.mail-item.is-new{border-left:4px solid #2563eb;background:#eff6ff}
+.mail-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px}
+.mail-subj{font-weight:700;margin:4px 0 6px}
+.badge-new{background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd}
+.grid.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:800px){.grid.two{grid-template-columns:1fr}}
+.nowrap{white-space:nowrap}
+.field.check{display:flex;align-items:center;gap:6px;margin-top:6px}

@@ -95,6 +95,29 @@ function zayavkaExists(number, date, carrierInn, carrierName) {
     return false;
   });
 }
+function tripTombstoneKey(date, driver, route, carrier) {
+  return [String(date || ""), normName(driver || ""), normName(route || ""), normName(carrier || "")].join("|");
+}
+function isTripDeleted(date, driver, route, carrier, id) {
+  if (!DB.deleted_trips || !DB.deleted_trips.length) return false;
+  if (id != null && DB.deleted_trips.some(t => t.id != null && Number(t.id) === Number(id))) return true;
+  const key = tripTombstoneKey(date, driver, route, carrier);
+  return DB.deleted_trips.some(t => tripTombstoneKey(t.date, t.driver, t.route, t.carrier) === key);
+}
+function markTripDeleted(t) {
+  if (!DB.deleted_trips) DB.deleted_trips = [];
+  const row = {
+    id: t && t.id != null ? Number(t.id) : null,
+    date: String((t && t.date) || ""),
+    driver: String((t && t.driver) || ""),
+    route: String((t && t.route) || ""),
+    carrier: String((t && t.carrier) || ""),
+    deleted_at: new Date().toISOString()
+  };
+  if (!isTripDeleted(row.date, row.driver, row.route, row.carrier, row.id)) {
+    DB.deleted_trips.push(row);
+  }
+}
 function tripExists(date, driver) {
   const d = String(date || "");
   const n = normName(driver);
@@ -108,6 +131,9 @@ function mergeImportPack(pack) {
   if (!DB.zayavki) DB.zayavki = [];
   if (!DB.quotes_extra) DB.quotes_extra = [];
   if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
+  if (!DB.deleted_trips) DB.deleted_trips = [];
+  if (!DB.mail_feed) DB.mail_feed = [];
+  if (!DB.mail_seen) DB.mail_seen = [];
   const added = {carriers:0, drivers:0, trucks:0, trips:0, zayavki:0};
   for (const src of (pack.carriers || [])) {
     const existing = findCarrier(src.inn, src.full_name);
@@ -195,6 +221,7 @@ function mergeImportPack(pack) {
     }
   }
   for (const src of (pack.trips || [])) {
+    if (isTripDeleted(src.date, src.driver, src.route, src.carrier, src.id)) continue;
     if (tripExists(src.date, src.driver)) continue;
     DB.trips.push({
       id: allocId("trip", DB.trips),
@@ -269,7 +296,11 @@ function applyVersionedImports() {
 }
 let DB = loadStore();
 if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
+if (!DB.deleted_trips) DB.deleted_trips = [];
+if (!DB.mail_feed) DB.mail_feed = [];
+if (!DB.mail_seen) DB.mail_seen = [];
 applyVersionedImports();
+try { let ch=false; if (typeof ensureTrucksFromSources === "function") { if (ensureTrucksFromSources()) ch=true; } if (typeof linkTrucksToCarriers === "function") { const r = linkTrucksToCarriers(); if (r && r.linked_now) ch=true; } if (ch) saveStore(DB); } catch (e) {}
 (function () {
   const n = purgeBlankZayavki();
   if (n) saveStore(DB);
@@ -316,6 +347,10 @@ function executorTitle(c) {
 let currentTab = "home", editingZayavkaId = null, previewZayavkaId = null;
 let zayavkaFormBaseline = null; // JSON snapshot after open/save; null = not on form
 let zayavkaFormSaved = true;
+let editingTripId = null;
+let tripFormBaseline = null;
+let tripFormSaved = true;
+const MAIL_SEEN_KEY = "ip_kasyanov_mail_seen_v1";
 function snapshotZayavkaForm() {
   try { return JSON.stringify(readZayavkaForm()); } catch (e) { return null; }
 }
@@ -339,6 +374,68 @@ function confirmLeaveZayavkaForm() {
   }
   return false;
 }
+function snapshotTripForm() {
+  try { return JSON.stringify(readTripForm()); } catch (e) { return null; }
+}
+function markTripFormClean() {
+  tripFormBaseline = snapshotTripForm();
+  tripFormSaved = true;
+}
+function isTripFormDirty() {
+  if (tripFormBaseline == null) return false;
+  const cur = snapshotTripForm();
+  if (cur == null) return false;
+  return cur !== tripFormBaseline;
+}
+function confirmLeaveTripForm() {
+  if (!isTripFormDirty()) return true;
+  const ans = confirm("Сохранить изменения рейса?\n\nОК — сохранить и уйти.\nОтмена — остаться в форме.");
+  if (ans) {
+    saveTrip(false);
+    return !!tripFormSaved;
+  }
+  return false;
+}
+function loadMailSeenIds() {
+  try {
+    const fromDb = Array.isArray(DB.mail_seen) ? DB.mail_seen : [];
+    const raw = localStorage.getItem(MAIL_SEEN_KEY);
+    const fromLs = raw ? JSON.parse(raw) : [];
+    const set = {};
+    for (const id of fromDb.concat(Array.isArray(fromLs) ? fromLs : [])) if (id) set[id] = 1;
+    return set;
+  } catch (e) { return {}; }
+}
+function saveMailSeenIds(set) {
+  const arr = Object.keys(set);
+  DB.mail_seen = arr;
+  try { localStorage.setItem(MAIL_SEEN_KEY, JSON.stringify(arr)); } catch (e) {}
+  try { saveStore(DB); } catch (e) {}
+}
+function markMailSeen(id) {
+  if (!id) return;
+  const set = loadMailSeenIds();
+  set[id] = 1;
+  saveMailSeenIds(set);
+}
+function markAllMailSeen(ids) {
+  const set = loadMailSeenIds();
+  for (const id of ids || []) if (id) set[id] = 1;
+  saveMailSeenIds(set);
+}
+function countUnseenMail() {
+  const set = loadMailSeenIds();
+  const items = DB.mail_feed || [];
+  let n = 0;
+  for (const it of items) if (it && it.id && !set[it.id]) n++;
+  return n;
+}
+function updateHomeTabBadge() {
+  const btn = document.querySelector('#nav button[data-tab="home"]');
+  if (!btn) return;
+  const n = countUnseenMail();
+  btn.textContent = n > 0 ? ("Главное (" + n + ")") : "Главное";
+}
 
 document.getElementById("nav").addEventListener("click", (e) => {
   const btn = e.target.closest("button[data-tab]");
@@ -353,36 +450,92 @@ function showTab(tab, opts) {
     if (!confirmLeaveZayavkaForm()) return;
     zayavkaFormBaseline = null;
   }
+  const leavingTrip = tripFormBaseline != null && !(tab === "reisy" && (opts.mode === "edit" || opts.mode === "new"));
+  if (leavingTrip) {
+    if (!confirmLeaveTripForm()) return;
+    tripFormBaseline = null;
+    editingTripId = null;
+  }
   // Destroy map when leaving Карта so DOM wipe does not leave a stale Leaflet instance
   if (currentTab === "karta" && tab !== "karta" && typeof destroyMap === "function") {
     try { destroyMap("karta-map"); } catch (e) {}
   }
   currentTab = tab;
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  updateHomeTabBadge();
   const main = document.getElementById("main");
   if (tab === "home") main.innerHTML = renderHome();
   else if (tab === "zayavki") main.innerHTML = renderZayavki(opts);
   else if (tab === "stavki") main.innerHTML = renderStavki();
   else if (tab === "karta") main.innerHTML = renderKarta();
-  else if (tab === "reisy") main.innerHTML = renderReisy();
+  else if (tab === "pochta") main.innerHTML = renderPochta();
+  else if (tab === "reisy") main.innerHTML = renderReisy(opts);
   else if (tab === "sprav") main.innerHTML = renderSprav();
   else if (tab === "backup") main.innerHTML = renderBackup();
   bindTabHandlers(tab);
 }
 function renderHome() {
-  const z = DB.zayavki.length, t = DB.trips.length, c = DB.carriers.length;
+  const z = DB.zayavki.length, tr = DB.trips.length, c = DB.carriers.length;
   const q = BASE_QUOTES.length + (DB.quotes_extra||[]).length;
-  return `<h1>Рабочее место</h1>
-  <div class="warn-box">Ни одну ставку клиенту не отправлять без вашего «да».</div>
+  const seen = loadMailSeenIds();
+  const feed = (DB.mail_feed || []).slice().sort((a,b) => String(b.date||"").localeCompare(String(a.date||"")));
+  const latest = feed.slice(0, 12);
+  const unseen = latest.filter(it => it.id && !seen[it.id]).length;
+  let feedHtml = "";
+  if (!latest.length) {
+    feedHtml = `<p class="muted">Пока нет запросов. Нажмите «Обновить», чтобы подтянуть ленту (почта / MAX).</p>`;
+  } else {
+    for (const it of latest) {
+      const isNew = it.id && !seen[it.id];
+      feedHtml += `<div class="card mail-item${isNew?" is-new":""}" data-mail-id="${esc(it.id||"")}">
+        <div class="mail-head">
+          <strong>${esc(fmtDate(it.date))}</strong>
+          <span class="chip">${esc(it.type||"")}</span>
+          <span class="chip muted">${esc(it.source||"")}</span>
+          ${isNew?`<span class="chip badge-new">новое</span>`:""}
+          ${it.company?`<span>${esc(it.company)}</span>`:""}
+        </div>
+        <div class="mail-subj">${esc(it.subject||it.route||"без темы")}</div>
+        <div class="muted">${esc(it.route||"")}${it.container?" · "+esc(it.container):""}${it.weight?" · "+esc(it.weight):""}</div>
+        ${it.rate?`<div><strong>${esc(it.rate)}</strong></div>`:""}
+        ${it.summary?`<div class="muted">${esc(it.summary)}</div>`:""}
+        ${isNew?`<button type="button" class="btn small ghost" data-mail-seen="${esc(it.id)}">отметить просмотренным</button>`:""}
+      </div>`;
+    }
+  }
+  // compact market vs own + recent trips
+  const own = (BASE_QUOTES||[]).filter(x => (x.source||"")==="почта" || (x.who||"")==="owner").slice(-5).reverse();
+  const recentTrips = (DB.trips||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,5);
+  let ratesHtml = own.length ? own.map(s =>
+    `<div class="src"><strong>${esc(fmtDate(s.date))}</strong> · ${esc(s.route_from||"")} → ${esc(s.route_to||"")}
+      · <strong>${esc(s.price_40 || s.price_20 || s.quote_raw || "")}</strong></div>`
+  ).join("") : `<p class="muted">Нет недавних ставок</p>`;
+  let tripsHtml = recentTrips.length ? recentTrips.map(t =>
+    `<div class="src"><strong>${esc(fmtDate(t.date))}</strong> · ${esc(t.route||"")} · ${esc(t.client||"")}
+      · маржа ${money(tripMarginValue(t))}</div>`
+  ).join("") : `<p class="muted">Нет рейсов</p>`;
+  return `<h1>Главное</h1>
+  <div class="card"><h2>Новые запросы ${unseen?`<span class="chip badge-new">${unseen}</span>`:""}</h2>
+    <div class="toolbar">
+      <button type="button" class="btn secondary" id="btn-refresh-feed">Обновить ленту</button>
+      <button type="button" class="btn ghost" id="btn-mark-all-seen">Все просмотрены</button>
+      <button type="button" class="btn ghost" onclick="showTab('pochta')">Вся почта</button>
+    </div>
+    <div id="home-feed">${feedHtml}</div>
+  </div>
   <div class="grid stats">
     <div class="card stat"><div class="num">${z}</div><div class="lbl">Заявок</div></div>
-    <div class="card stat"><div class="num">${t}</div><div class="lbl">Рейсов</div></div>
+    <div class="card stat"><div class="num">${tr}</div><div class="lbl">Рейсов</div></div>
     <div class="card stat"><div class="num">${c}</div><div class="lbl">Перевозчиков</div></div>
     <div class="card stat"><div class="num">${q}</div><div class="lbl">Ставок в базе</div></div>
   </div>
+  <div class="grid two">
+    <div class="card"><h2>Недавние ставки</h2>${ratesHtml}</div>
+    <div class="card"><h2>Недавние рейсы</h2>${tripsHtml}</div>
+  </div>
   <div class="card">
     <h2>Как пользоваться</h2>
-    <p>Откройте этот файл двойным щелчком в Chrome, Edge или Яндекс.Браузере. Интернет не нужен для заявок и ставок. Вкладка «Карта» и автообновление требуют интернет.</p>
+    <p>Откройте этот файл двойным щелчком в Chrome, Edge или Яндекс.Браузере. Интернет не нужен для заявок и ставок. Вкладки «Карта», «Почта» и автообновление требуют интернет.</p>
     <p class="muted">Данные хранятся в этом браузере на этом компьютере. Сделайте «Резервную копию», если переходите на другой ПК.</p>
     <div class="toolbar" style="margin-top:12px">
       <button class="btn" onclick="showTab('zayavki',{mode:'new'})">Новая заявка</button>
@@ -455,7 +608,11 @@ function renderZayavkaForm(id) {
       <div class="field wide"><label>Сведение о грузе</label><input id="z-cargo" value="${esc(z.cargo)}"></div>
       <div class="field wide"><label>Ставка (с НДС/без и когда оплата)</label><input id="z-rate" value="${esc(z.rate)}"></div>
     </div>
-    <div class="row"><div class="field wide"><label>Марка, №тягача, №п/п</label><input id="z-truck" value="${esc(z.truck)}"></div></div>
+    <div class="row">
+      <div class="field"><label>Машина перевозчика</label>
+        <select id="z-truck-pick"><option value="">— выбрать из справочника —</option></select></div>
+      <div class="field wide"><label>Марка, №тягача, №п/п</label><input id="z-truck" value="${esc(z.truck)}"></div>
+    </div>
     <div class="row"><div class="field wide"><label>Водитель (паспорт и телефон)</label><textarea id="z-driver">${esc(z.driver)}</textarea></div></div>
   </div>
   <div class="card"><h2>Перевозчик (исполнитель)</h2>
@@ -581,6 +738,7 @@ function applyCopyFrom(id) {
   document.getElementById("z-driver").value = src.driver || "";
   if (src.carrier) fillCarrierFields(src.carrier);
   if (src.carrier_id) document.getElementById("z-carrier-pick").value = String(src.carrier_id);
+  if (typeof fillZayavkaTruckOptions === "function") fillZayavkaTruckOptions(src.carrier_id || null, src.truck || "");
   toast("Скопировано из заявки №" + src.number);
 }
 function renderZayavkaHTML(z) {
@@ -1113,7 +1271,7 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
 
   if (similarEnough && (p20 || p40)) {
     pairText = fmtPair(p20, p40, isEstimate);
-    warning = "Ни одну ставку клиенту не отправлять без вашего «да»." +
+    warning = "" +
       (isEstimate ? " Цифры помечены ≈ — точного совпадения маршрута в базе нет." : "");
     method = exact ? "точные совпадения в вашей базе" : "близкие маршруты из вашей базы";
     has_proposal = true;
@@ -1127,7 +1285,7 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
       pairText = fmtPair(p20, p40, true);
       method = distInfo.method;
       confidence = "оценка по км";
-      warning = "Ни одну ставку клиенту не отправлять без вашего «да». " +
+      warning = "" +
         "Это оценка по расстоянию (≈" + distInfo.km + " км), не точная ставка. " +
         "Считается из ваших прошлых ставок: цена ≈ a + b·км" +
         (distInfo.fit40 ? (" (40': a=" + Math.round(distInfo.fit40.fit.a) + ", b=" + distInfo.fit40.fit.b.toFixed(1) + " ₽/км, n=" + distInfo.fit40.n + ", " + distInfo.fit40.scope + ")") : "") +
@@ -1146,7 +1304,7 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
     } else {
       pairText = "в базе нет похожих маршрутов";
       method = "нет данных";
-      warning = "Ни одну ставку клиенту не отправлять без вашего «да». " +
+      warning = "" +
         (distInfo.message || "По этому направлению похожих ваших ставок нет — цифру не предлагаю.");
       has_proposal = false;
     }
@@ -1179,7 +1337,7 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
 }
 function renderStavki() {
   return `<h1>Калькулятор ставок</h1>
-  <div class="warn-box">Ни одну ставку клиенту не отправлять без вашего «да». Калькулятор показывает источники и помечает ориентиры знаком ≈.</div>
+  <div class="warn-box">Калькулятор показывает источники и помечает ориентиры знаком ≈.</div>
   <div class="card">
     <div class="row">
       <div class="field"><label>Откуда</label><input id="s-from" placeholder="СПб"></div>
@@ -1280,14 +1438,151 @@ function addQuote() {
   if (!DB.quotes_extra) DB.quotes_extra = [];
   DB.quotes_extra.push(q); saveStore(DB); toast("Ставка добавлена в базу");
 }
-function renderReisy() {
+function defaultVatPct() {
+  const v = Number(window._tripVatPct);
+  return Number.isFinite(v) && v >= 0 ? v : 5;
+}
+function rateNetOfVat(amount, withVat, vatPct) {
+  const n = Number(amount) || 0;
+  const pct = (vatPct == null ? defaultVatPct() : Number(vatPct)) || 0;
+  if (!withVat || pct <= 0) return n;
+  return n / (1 + pct / 100);
+}
+function computeTripMarginHint(t) {
+  const vat = t.vat_pct != null && t.vat_pct !== "" ? Number(t.vat_pct) : defaultVatPct();
+  const clientNet = rateNetOfVat(t.client_rate, !!t.client_with_vat, vat);
+  const carrierNet = rateNetOfVat(t.carrier_rate, !!t.carrier_with_vat, vat);
+  const extra = Number(t.extra_expenses) || 0;
+  const margin = clientNet - carrierNet - extra;
+  const pct = clientNet > 0 ? (margin / clientNet) * 100 : null;
+  return { margin: Math.round(margin), pct, clientNet, carrierNet, vat };
+}
+function tripMarginValue(t) {
+  if (!t) return 0;
+  if (t.margin !== "" && t.margin != null && Number.isFinite(Number(t.margin))) return Number(t.margin);
+  return computeTripMarginHint(t).margin;
+}
+function ensureTripMarginFilled(t) {
+  if (!t) return t;
+  if (t.margin === "" || t.margin == null || !Number.isFinite(Number(t.margin))) {
+    t.margin = computeTripMarginHint(t).margin;
+  }
+  return t;
+}
+function tripStatusOptions(selected) {
+  const opts = ["черновик", "в работе", "выполнен", "оплачен", "отменён"];
+  const cur = selected || "в работе";
+  if (cur && opts.indexOf(cur) < 0) opts.unshift(cur);
+  return opts.map(o => `<option${o === cur ? " selected" : ""}>${o}</option>`).join("");
+}
+function payOptions(selected) {
+  const opts = ["не оплачено", "частично", "оплачено"];
+  const cur = selected || "не оплачено";
+  return opts.map(o => `<option${o === cur ? " selected" : ""}>${o}</option>`).join("");
+}
+function renderTripForm(trip) {
+  const t = trip || {};
+  const isEdit = !!(trip && trip.id != null);
+  const hint = computeTripMarginHint(t);
+  const marginVal = (t.margin !== "" && t.margin != null) ? t.margin : "";
+  return `<div class="card" id="trip-form-wrap">
+    <h2>${isEdit ? "Изменить рейс" : "Новый рейс"}</h2>
+    <input type="hidden" id="t-id" value="${isEdit ? esc(String(t.id)) : ""}">
+    <div class="row">
+      <div class="field" style="max-width:150px"><label>Дата</label><input type="date" id="t-date" value="${esc(t.date||"")}"></div>
+      <div class="field"><label>Клиент</label><input id="t-client" value="${esc(t.client||"")}"></div>
+      <div class="field wide"><label>Маршрут</label><input id="t-route" value="${esc(t.route||"")}"></div>
+      <div class="field"><label>Статус</label><select id="t-status">${tripStatusOptions(t.status)}</select></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Перевозчик</label><input id="t-carrier" value="${esc(t.carrier||"")}"></div>
+      <div class="field"><label>Водитель</label><input id="t-driver" value="${esc(t.driver||"")}"></div>
+      <div class="field"><label>Машина</label><input id="t-truck" value="${esc(t.truck||"")}" placeholder="тягач / прицеп"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Ставка клиенту</label><input id="t-cr" type="number" value="${t.client_rate != null ? esc(String(t.client_rate)) : ""}">
+        <label class="check"><input type="checkbox" id="t-cr-vat" ${t.client_with_vat ? "checked" : ""}> с НДС</label></div>
+      <div class="field"><label>Ставка перевозчику</label><input id="t-car" type="number" value="${t.carrier_rate != null ? esc(String(t.carrier_rate)) : ""}">
+        <label class="check"><input type="checkbox" id="t-car-vat" ${t.carrier_with_vat ? "checked" : ""}> с НДС</label></div>
+      <div class="field" style="max-width:120px"><label>НДС %</label><input id="t-vat-pct" type="number" step="0.1" value="${esc(String(t.vat_pct != null ? t.vat_pct : defaultVatPct()))}"></div>
+      <div class="field"><label>Доп. расходы</label><input id="t-extra" type="number" value="${t.extra_expenses != null ? esc(String(t.extra_expenses)) : "0"}"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Маржа (вручную)</label>
+        <input id="t-margin" type="number" value="${marginVal !== "" ? esc(String(marginVal)) : ""}">
+        <div class="muted" id="t-margin-hint">расчёт: ${money(hint.margin)}${hint.pct != null ? " (" + hint.pct.toFixed(1) + "%)" : ""}</div>
+        <button type="button" class="btn small ghost" id="btn-fill-margin">подставить расчёт</button>
+      </div>
+      <div class="field"><label>Оплата клиент</label><select id="t-pay-c">${payOptions(t.pay_client)}</select></div>
+      <div class="field"><label>Оплата перевозчик</label><select id="t-pay-car">${payOptions(t.pay_carrier)}</select></div>
+      <div class="field"><label>Заявка</label>
+        <select id="t-zid"><option value="">—</option>
+          ${DB.zayavki.map(z=>`<option value="${z.id}" ${t.zayavka_id===z.id?"selected":""}>№${esc(z.number)} ${esc((z.carrier&&z.carrier.full_name)||"")}</option>`).join("")}
+        </select></div>
+    </div>
+    <div class="row">
+      <div class="field wide"><label>Документы / заметка</label><input id="t-note" value="${esc(t.note||"")}"></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn" id="btn-save-trip">Сохранить рейс</button>
+      <button class="btn ghost" id="btn-cancel-trip" type="button">Отмена</button>
+    </div>
+  </div>`;
+}
+function readTripForm() {
+  const idRaw = (document.getElementById("t-id") || {}).value;
+  return {
+    id: idRaw ? Number(idRaw) : null,
+    date: (document.getElementById("t-date") || {}).value || "",
+    client: ((document.getElementById("t-client") || {}).value || "").trim(),
+    route: ((document.getElementById("t-route") || {}).value || "").trim(),
+    status: (document.getElementById("t-status") || {}).value || "в работе",
+    carrier: ((document.getElementById("t-carrier") || {}).value || "").trim(),
+    driver: ((document.getElementById("t-driver") || {}).value || "").trim(),
+    truck: ((document.getElementById("t-truck") || {}).value || "").trim(),
+    client_rate: Number((document.getElementById("t-cr") || {}).value) || 0,
+    carrier_rate: Number((document.getElementById("t-car") || {}).value) || 0,
+    client_with_vat: !!(document.getElementById("t-cr-vat") || {}).checked,
+    carrier_with_vat: !!(document.getElementById("t-car-vat") || {}).checked,
+    vat_pct: Number((document.getElementById("t-vat-pct") || {}).value),
+    extra_expenses: Number((document.getElementById("t-extra") || {}).value) || 0,
+    margin: (function(){
+      const el = document.getElementById("t-margin");
+      if (!el || el.value === "") return null;
+      const n = Number(el.value);
+      return Number.isFinite(n) ? n : null;
+    })(),
+    pay_client: (document.getElementById("t-pay-c") || {}).value || "не оплачено",
+    pay_carrier: (document.getElementById("t-pay-car") || {}).value || "не оплачено",
+    zayavka_id: (function(){
+      const v = (document.getElementById("t-zid") || {}).value;
+      return v ? Number(v) : null;
+    })(),
+    note: ((document.getElementById("t-note") || {}).value || "").trim()
+  };
+}
+function refreshTripMarginHint() {
+  const hintEl = document.getElementById("t-margin-hint");
+  if (!hintEl) return;
+  const draft = readTripForm();
+  const hint = computeTripMarginHint(draft);
+  hintEl.textContent = "расчёт: " + money(hint.margin) + (hint.pct != null ? (" (" + hint.pct.toFixed(1) + "%)") : "");
+}
+function renderReisy(opts) {
+  opts = opts || {};
   const month = (window._tripMonth) || new Date().toISOString().slice(0,7);
   const trips = DB.trips.filter(t => !month || (t.date||"").startsWith(month));
   let sumClient = 0, sumCarrier = 0, sumMargin = 0;
   for (const t of trips) {
     sumClient += Number(t.client_rate)||0;
     sumCarrier += Number(t.carrier_rate)||0;
-    sumMargin += (Number(t.client_rate)||0) - (Number(t.carrier_rate)||0);
+    sumMargin += tripMarginValue(t);
+  }
+  const showForm = opts.mode === "edit" || opts.mode === "new" || editingTripId != null;
+  let formTrip = null;
+  if (opts.mode === "edit" || editingTripId != null) {
+    const id = opts.id != null ? opts.id : editingTripId;
+    formTrip = DB.trips.find(x => x.id === Number(id)) || null;
   }
   let html = `<h1>Рейсы</h1>
   <div class="toolbar">
@@ -1300,74 +1595,69 @@ function renderReisy() {
     <div class="card stat"><div class="num">${money(sumClient)}</div><div class="lbl">Клиенту</div></div>
     <div class="card stat"><div class="num">${money(sumCarrier)}</div><div class="lbl">Перевозчику</div></div>
     <div class="card stat"><div class="num">${money(sumMargin)}</div><div class="lbl">Маржа</div></div>
-  </div>
-  <div class="card" id="trip-form-wrap" style="display:none">
-    <h2>Новый рейс</h2>
-    <div class="row">
-      <div class="field" style="max-width:150px"><label>Дата</label><input type="date" id="t-date"></div>
-      <div class="field"><label>Клиент</label><input id="t-client"></div>
-      <div class="field wide"><label>Маршрут</label><input id="t-route"></div>
-    </div>
-    <div class="row">
-      <div class="field"><label>Перевозчик</label><input id="t-carrier"></div>
-      <div class="field"><label>Водитель</label><input id="t-driver"></div>
-      <div class="field"><label>Ставка клиенту</label><input id="t-cr" type="number"></div>
-      <div class="field"><label>Ставка перевозчику</label><input id="t-car" type="number"></div>
-    </div>
-    <div class="row">
-      <div class="field"><label>Оплата клиент</label><select id="t-pay-c"><option>не оплачено</option><option>частично</option><option>оплачено</option></select></div>
-      <div class="field"><label>Оплата перевозчик</label><select id="t-pay-car"><option>не оплачено</option><option>частично</option><option>оплачено</option></select></div>
-      <div class="field"><label>Заявка</label>
-        <select id="t-zid"><option value="">—</option>
-          ${DB.zayavki.map(z=>`<option value="${z.id}">№${esc(z.number)} ${esc((z.carrier&&z.carrier.full_name)||"")}</option>`).join("")}
-        </select></div>
-      <div class="field wide"><label>Документы / заметка</label><input id="t-note"></div>
-    </div>
-    <button class="btn" id="btn-save-trip">Сохранить рейс</button>
-  </div>
-  <div class="card"><table><thead><tr>
+  </div>`;
+  if (showForm) html += renderTripForm(formTrip);
+  else html += `<div id="trip-form-wrap" style="display:none"></div>`;
+  html += `<div class="card"><table><thead><tr>
     <th>Дата</th><th>Клиент</th><th>Маршрут</th><th>Перевозчик</th><th>Клиенту</th><th>Перевозчику</th><th>Маржа</th><th>Оплаты</th><th></th>
   </tr></thead><tbody>`;
   if (!trips.length) html += `<tr><td colspan="9" class="muted">Рейсов за месяц нет</td></tr>`;
   for (const t of trips.slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)))) {
-    const margin = (Number(t.client_rate)||0) - (Number(t.carrier_rate)||0);
+    const margin = tripMarginValue(t);
     html += `<tr>
-      <td>${esc(fmtDate(t.date))}</td><td>${esc(t.client)}</td><td>${esc(t.route)}</td>
-      <td>${esc(t.carrier)}<div class="muted">${esc(t.driver||"")}</div></td>
+      <td>${esc(fmtDate(t.date))}</td><td>${esc(t.client)}</td><td>${esc(t.route)}
+        ${t.status?`<div class="muted">${esc(t.status)}</div>`:""}</td>
+      <td>${esc(t.carrier)}<div class="muted">${esc(t.driver||"")}</div>
+        ${t.truck?`<div class="muted">${esc(t.truck)}</div>`:""}</td>
       <td>${money(t.client_rate)}</td><td>${money(t.carrier_rate)}</td><td><strong>${money(margin)}</strong></td>
       <td><span class="chip">${esc(t.pay_client)}</span> / <span class="chip">${esc(t.pay_carrier)}</span>
         ${t.note?`<div class="muted">${esc(t.note)}</div>`:""}
         ${t.zayavka_id?`<div><a href="#" data-view="${t.zayavka_id}">заявка</a></div>`:""}</td>
-      <td><button class="btn small ghost" data-del-trip="${t.id}">Удалить</button></td></tr>`;
+      <td class="nowrap">
+        <button class="btn small" data-edit-trip="${t.id}">Изменить</button>
+        <button class="btn small ghost" data-del-trip="${t.id}">Удалить</button>
+      </td></tr>`;
   }
   return html + `</tbody></table></div>`;
 }
-function saveTrip() {
-  const t = {
-    id: DB.next.trip++,
-    date: document.getElementById("t-date").value || new Date().toISOString().slice(0,10),
-    client: document.getElementById("t-client").value.trim(),
-    route: document.getElementById("t-route").value.trim(),
-    carrier: document.getElementById("t-carrier").value.trim(),
-    driver: document.getElementById("t-driver").value.trim(),
-    client_rate: Number(document.getElementById("t-cr").value)||0,
-    carrier_rate: Number(document.getElementById("t-car").value)||0,
-    pay_client: document.getElementById("t-pay-c").value,
-    pay_carrier: document.getElementById("t-pay-car").value,
-    zayavka_id: document.getElementById("t-zid").value ? Number(document.getElementById("t-zid").value) : null,
-    note: document.getElementById("t-note").value.trim()
-  };
-  DB.trips.push(t); saveStore(DB); toast("Рейс сохранён"); showTab("reisy");
+function saveTrip(andStay) {
+  const form = document.getElementById("trip-form-wrap");
+  if (!form || !document.getElementById("t-date")) {
+    tripFormSaved = false;
+    return false;
+  }
+  const raw = readTripForm();
+  // If margin blank — fill from hint once; never overwrite typed value
+  if (raw.margin == null) {
+    raw.margin = computeTripMarginHint(raw).margin;
+  }
+  const id = raw.id;
+  if (id != null && DB.trips.some(x => x.id === id)) {
+    const t = DB.trips.find(x => x.id === id);
+    Object.assign(t, raw, { id: t.id });
+  } else {
+    const t = Object.assign({}, raw, { id: allocId("trip", DB.trips) });
+    DB.trips.push(t);
+  }
+  saveStore(DB);
+  tripFormSaved = true;
+  markTripFormClean();
+  toast("Рейс сохранён");
+  if (andStay) return true;
+  editingTripId = null;
+  tripFormBaseline = null;
+  showTab("reisy");
+  return true;
 }
 function exportTripsCSV() {
   const month = window._tripMonth || "";
   const trips = DB.trips.filter(t => !month || (t.date||"").startsWith(month));
-  const header = ["Дата","Клиент","Маршрут","Перевозчик","Водитель","Ставка клиенту","Ставка перевозчику","Маржа","Оплата клиент","Оплата перевозчик","Заметка","Заявка"];
+  const header = ["Дата","Клиент","Маршрут","Статус","Перевозчик","Водитель","Машина","Ставка клиенту","Ставка перевозчику","Доп. расходы","Маржа","Оплата клиент","Оплата перевозчик","Заметка","Заявка"];
   const lines = [header.join(";")];
   for (const t of trips) {
-    const margin = (Number(t.client_rate)||0) - (Number(t.carrier_rate)||0);
+    const margin = tripMarginValue(t);
     const z = t.zayavka_id ? (DB.zayavki.find(x=>x.id===t.zayavka_id)||{}) : {};
-    const row = [fmtDate(t.date), t.client, t.route, t.carrier, t.driver, t.client_rate, t.carrier_rate, margin, t.pay_client, t.pay_carrier, t.note, z.number||""]
+    const row = [fmtDate(t.date), t.client, t.route, t.status||"", t.carrier, t.driver, t.truck||"", t.client_rate, t.carrier_rate, t.extra_expenses||0, margin, t.pay_client, t.pay_carrier, t.note, z.number||""]
       .map(v => { const s = String(v==null?"":v).replace(/"/g,'""'); return /[;"\n]/.test(s) ? `"${s}"` : s; });
     lines.push(row.join(";"));
   }
@@ -1464,6 +1754,308 @@ function renderTripsCell(items) {
   if (items.length > 4) list += `<div class="muted">и ещё ${items.length - 4}</div>`;
   return `<div class="trips-count" title="${esc(title)}">Рейсы: ${items.length}</div><div class="trips-list">${list}</div>`;
 }
+
+function truckPlateKey(t) {
+  return normPlate((t && (t.tractor_number || t.line || t.notes)) || "");
+}
+function trucksOfCarrier(carrierId) {
+  return (DB.trucks || []).filter(t => t.carrier_id != null && Number(t.carrier_id) === Number(carrierId));
+}
+function trucksUnlinked() {
+  return (DB.trucks || []).filter(t => t.carrier_id == null);
+}
+function formatTruckShort(t) {
+  if (!t) return "";
+  const head = [t.brand, t.tractor_number].filter(Boolean).join(" ").trim();
+  const trail = [t.trailer_brand, t.trailer_number].filter(Boolean).join(" ").trim();
+  if (head && trail) return head + " / " + trail;
+  return head || trail || t.line || t.notes || ("#" + t.id);
+}
+function driverNameForTruck(t) {
+  if (!t) return "";
+  if (t.driver_id != null) {
+    const d = DB.drivers.find(x => x.id === t.driver_id);
+    if (d) return d.full_name || "";
+  }
+  const d2 = DB.drivers.find(x => x.truck_id != null && Number(x.truck_id) === Number(t.id));
+  return d2 ? (d2.full_name || "") : "";
+}
+function findCarrierIdForPlate(plate) {
+  const p = normPlate(plate);
+  if (!p) return null;
+  // zayavki with this plate
+  for (const z of (DB.zayavki || [])) {
+    const zt = normPlate(z.truck || "");
+    if (zt && (zt === p || zt.indexOf(p) >= 0 || p.indexOf(zt) >= 0)) {
+      if (z.carrier_id != null) return z.carrier_id;
+      const inn = z.carrier && z.carrier.inn;
+      const found = findCarrier(inn, z.carrier && z.carrier.full_name);
+      if (found) return found.id;
+    }
+  }
+  // trips
+  for (const tr of (DB.trips || [])) {
+    const blob = normPlate([tr.truck, tr.note, tr.route].filter(Boolean).join(" "));
+    if (blob && blob.indexOf(p) >= 0) {
+      const found = findCarrier(null, tr.carrier);
+      if (found) return found.id;
+    }
+  }
+  return null;
+}
+
+/** Parse "Марка А123ВС 45 / п/п XYZ" style line into fields. */
+function parseTruckLine(line) {
+  const s = String(line || "").trim();
+  if (!s) return null;
+  const plateRe = /[АВЕКМНОРСТУХABEKMHOPCTYX]\s*\d{3}\s*[АВЕКМНОРСТУХABEKMHOPCTYX]{2}\s*\d{2,3}|\d{4}\s*[АВЕКМНОРСТУХABEKMHOPCTYX]{2}\s*\d{2,3}/gi;
+  const plates = (s.match(plateRe) || []).map(x => x.replace(/\s+/g, " ").trim());
+  const tractor = plates[0] || "";
+  const trailer = plates[1] || "";
+  let brand = "";
+  const bm = s.match(/^\s*([A-Za-zА-Яа-яЁё][A-Za-zА-Яа-яЁё\-]*(?:\s+[A-Za-zА-Яа-яЁё\-]+)?)/);
+  if (bm) {
+    const cand = bm[1].trim().replace(/[,/]+$/, "").trim();
+    if (cand.length > 1 && !/\d/.test(cand) && !/^(п\/п|пп|прицеп)$/i.test(cand)) brand = cand;
+  }
+  return {
+    line: s,
+    brand: brand,
+    tractor_number: tractor,
+    trailer_number: trailer,
+    trailer_brand: "",
+    notes: s
+  };
+}
+/** Idempotent: create truck rows from zayavki/trips text when plate not yet in DB.trucks. */
+function ensureTrucksFromSources() {
+  if (!DB.trucks) DB.trucks = [];
+  let created = 0;
+  const seen = new Set();
+  function upsertFromLine(line, carrierId, driverHint) {
+    const parsed = parseTruckLine(line);
+    if (!parsed || !parsed.tractor_number) return;
+    const key = normPlate(parsed.tractor_number);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    let truck = typeof findTruckByPlate === "function" ? findTruckByPlate(parsed.tractor_number, parsed.trailer_number) : null;
+    if (!truck) {
+      truck = DB.trucks.find(t => normPlate(t.tractor_number || t.line || "") === key);
+    }
+    if (!truck) {
+      truck = Object.assign({ id: allocId("truck", DB.trucks), carrier_id: carrierId != null ? carrierId : null, driver_id: null }, parsed);
+      DB.trucks.push(truck);
+      created++;
+    } else if (truck.carrier_id == null && carrierId != null) {
+      truck.carrier_id = carrierId;
+    }
+    if (driverHint && truck.driver_id == null) {
+      const d = DB.drivers.find(x => normName(x.full_name) === normName(driverHint));
+      if (d) {
+        truck.driver_id = d.id;
+        if (d.truck_id == null) d.truck_id = truck.id;
+        if (truck.carrier_id == null && d.carrier_id != null) truck.carrier_id = d.carrier_id;
+      }
+    }
+  }
+  for (const z of (DB.zayavki || [])) {
+    if (!z.truck) continue;
+    let cid = z.carrier_id != null ? z.carrier_id : null;
+    if (cid == null && z.carrier) {
+      const f = findCarrier(z.carrier.inn, z.carrier.full_name);
+      if (f) cid = f.id;
+    }
+    upsertFromLine(z.truck, cid, z.driver);
+  }
+  for (const tr of (DB.trips || [])) {
+    if (!tr.truck && !(tr.note || "").match(/[АВЕКМНОРСТУХA-Z]\s*\d{3}/i)) continue;
+    const line = tr.truck || tr.note || "";
+    const found = findCarrier(null, tr.carrier);
+    upsertFromLine(line, found ? found.id : null, tr.driver);
+  }
+  return created;
+}
+
+/** Idempotent: only fills blank carrier_id. Never overwrites user assignment. */
+function linkTrucksToCarriers() {
+  if (!DB.trucks) DB.trucks = [];
+  let linked = 0, unlinked = 0;
+  for (const t of DB.trucks) {
+    if (t.carrier_id != null) continue;
+    let cid = null;
+    if (t.driver_id != null) {
+      const d = DB.drivers.find(x => x.id === t.driver_id);
+      if (d && d.carrier_id != null) cid = d.carrier_id;
+    }
+    if (cid == null) {
+      const d2 = DB.drivers.find(x => x.truck_id != null && Number(x.truck_id) === Number(t.id));
+      if (d2 && d2.carrier_id != null) cid = d2.carrier_id;
+    }
+    if (cid == null) cid = findCarrierIdForPlate(t.tractor_number || t.line || "");
+    if (cid != null) {
+      t.carrier_id = cid;
+      linked++;
+    } else {
+      unlinked++;
+    }
+  }
+  // also count already-linked for report
+  const already = DB.trucks.filter(t => t.carrier_id != null).length - linked;
+  const report = { linked_now: linked, already_linked: Math.max(0, already), unlinked: unlinked, total: DB.trucks.length };
+  window.__truckLinkReport = report;
+  return report;
+}
+(function runTruckLinkMigration() {
+  let created = 0;
+  try { created = ensureTrucksFromSources() || 0; } catch (e) {}
+  const rep = linkTrucksToCarriers();
+  rep.created_from_sources = created;
+  window.__truckLinkReport = rep;
+  if (rep.linked_now || created) try { saveStore(DB); } catch (e) {}
+})();
+function renderCarrierTrucksCell(c) {
+  const list = trucksOfCarrier(c.id);
+  if (!list.length) return `<span class="muted">—</span>`;
+  return list.map(t => `<div class="mono" title="${esc(formatTruckShort(t))}">${esc(t.tractor_number || formatTruckShort(t))}</div>`).join("");
+}
+function renderTruckEditorList(carrierId) {
+  const list = trucksOfCarrier(carrierId);
+  let h = `<div class="card" style="background:#fff;margin-top:10px"><h3>Машины</h3>`;
+  if (!list.length) h += `<p class="muted">Машин пока нет</p>`;
+  else {
+    h += `<table><thead><tr><th>Тягач</th><th>Прицеп</th><th>Марка</th><th>Водитель</th><th></th></tr></thead><tbody>`;
+    for (const t of list) {
+      h += `<tr>
+        <td class="mono">${esc(t.tractor_number||"")}</td>
+        <td class="mono">${esc(t.trailer_number||"")}</td>
+        <td>${esc([t.brand,t.trailer_brand].filter(Boolean).join(" / "))}</td>
+        <td>${esc(driverNameForTruck(t))}</td>
+        <td class="nowrap">
+          <button type="button" class="btn small ghost" onclick="editTruck(${t.id},${carrierId})">Изменить</button>
+          <button type="button" class="btn small ghost" style="color:#b91c1c" onclick="deleteTruck(${t.id})">Удалить</button>
+        </td></tr>`;
+    }
+    h += `</tbody></table>`;
+  }
+  h += `<div class="toolbar"><button type="button" class="btn small" onclick="editTruck(null,${carrierId})">+ Добавить машину</button></div>
+    <div id="truck-edit-${carrierId}"></div></div>`;
+  return h;
+}
+function renderUnlinkedTrucksBlock() {
+  const list = trucksUnlinked();
+  if (!list.length) return "";
+  const opts = DB.carriers.map(c => `<option value="${c.id}">${esc(c.full_name)}</option>`).join("");
+  let h = `<div class="card"><h2>Машины без перевозчика <span class="chip">${list.length}</span></h2>
+    <p class="muted">Привяжите к перевозчику — тогда они появятся в его карточке и в заявке.</p>
+    <table><thead><tr><th>Тягач</th><th>Прицеп</th><th>Марка / строка</th><th>Назначить</th></tr></thead><tbody>`;
+  for (const t of list) {
+    h += `<tr class="sprav-row" data-fio="${esc(formatTruckShort(t))}">
+      <td class="mono">${esc(t.tractor_number||"")}</td>
+      <td class="mono">${esc(t.trailer_number||"")}</td>
+      <td>${esc(t.brand||"")} ${esc(t.line||t.notes||"")}</td>
+      <td><select id="orphan-truck-${t.id}"><option value="">— перевозчик —</option>${opts}</select>
+        <button type="button" class="btn small" onclick="assignTruckCarrier(${t.id})">OK</button>
+        <button type="button" class="btn small ghost" onclick="editTruck(${t.id},null)">Изменить</button>
+      </td></tr>`;
+  }
+  return h + `</tbody></table><div id="truck-edit-orphan"></div></div>`;
+}
+function editTruck(id, carrierId) {
+  const t = id == null ? { carrier_id: carrierId } : (DB.trucks.find(x => x.id === id) || {});
+  const cid = t.carrier_id != null ? t.carrier_id : carrierId;
+  const boxId = cid != null ? ("truck-edit-" + cid) : "truck-edit-orphan";
+  let box = document.getElementById(boxId);
+  if (!box) {
+    // fallback: inject into carrier-edit
+    box = document.getElementById("carrier-edit") || document.getElementById("main");
+  }
+  const carrierOpts = `<option value="">— без перевозчика —</option>` + DB.carriers.map(c =>
+    `<option value="${c.id}" ${Number(cid)===c.id?"selected":""}>${esc(c.full_name)}</option>`).join("");
+  const driverOpts = `<option value="">—</option>` + DB.drivers
+    .filter(d => cid == null || d.carrier_id == null || Number(d.carrier_id) === Number(cid))
+    .map(d => `<option value="${d.id}" ${t.driver_id===d.id?"selected":""}>${esc(d.full_name)}</option>`).join("");
+  box.innerHTML = `<div class="card" style="background:#f1f5f9;margin-top:8px">
+    <h3>${id==null?"Новая машина":"Изменить машину"}</h3>
+    <div class="row">
+      <div class="field"><label>Марка тягача</label><input id="trk-brand" value="${esc(t.brand||"")}"></div>
+      <div class="field"><label>№ тягача</label><input id="trk-tractor" value="${esc(t.tractor_number||"")}"></div>
+      <div class="field"><label>Марка прицепа</label><input id="trk-trailer-brand" value="${esc(t.trailer_brand||"")}"></div>
+      <div class="field"><label>№ прицепа</label><input id="trk-trailer" value="${esc(t.trailer_number||"")}"></div>
+      <div class="field wide"><label>Строка в заявке</label><input id="trk-line" value="${esc(t.line||t.notes||"")}"></div>
+      <div class="field"><label>Перевозчик</label><select id="trk-carrier">${carrierOpts}</select></div>
+      <div class="field"><label>Водитель</label><select id="trk-driver">${driverOpts}</select></div>
+    </div>
+    <div class="toolbar">
+      <button type="button" class="btn" onclick="saveTruck(${id==null?"null":id})">Сохранить машину</button>
+      <button type="button" class="btn ghost" onclick="showTab('sprav')">Отмена</button>
+    </div></div>`;
+  box.scrollIntoView({behavior:"smooth", block:"nearest"});
+}
+function saveTruck(id) {
+  const v = {
+    brand: (document.getElementById("trk-brand")||{}).value.trim(),
+    tractor_number: (document.getElementById("trk-tractor")||{}).value.trim(),
+    trailer_brand: (document.getElementById("trk-trailer-brand")||{}).value.trim(),
+    trailer_number: (document.getElementById("trk-trailer")||{}).value.trim(),
+    line: (document.getElementById("trk-line")||{}).value.trim(),
+    notes: (document.getElementById("trk-line")||{}).value.trim(),
+    carrier_id: (function(){ const v=(document.getElementById("trk-carrier")||{}).value; return v?Number(v):null; })(),
+    driver_id: (function(){ const v=(document.getElementById("trk-driver")||{}).value; return v?Number(v):null; })()
+  };
+  if (!v.tractor_number && !v.line) { toast("Укажите номер тягача или строку"); return; }
+  if (!v.line) {
+    v.line = [v.brand, v.tractor_number].filter(Boolean).join(" ");
+    if (v.trailer_number) v.line += " / " + [v.trailer_brand, v.trailer_number].filter(Boolean).join(" ");
+  }
+  if (id == null) {
+    const row = Object.assign({ id: allocId("truck", DB.trucks) }, v);
+    DB.trucks.push(row);
+    if (v.driver_id != null) {
+      const d = DB.drivers.find(x => x.id === v.driver_id);
+      if (d) d.truck_id = row.id;
+    }
+  } else {
+    const t = DB.trucks.find(x => x.id === id);
+    if (t) Object.assign(t, v);
+    if (v.driver_id != null) {
+      const d = DB.drivers.find(x => x.id === v.driver_id);
+      if (d) d.truck_id = id;
+    }
+  }
+  saveStore(DB); toast("Машина сохранена"); showTab("sprav");
+}
+function deleteTruck(id) {
+  const t = DB.trucks.find(x => x.id === id);
+  if (!t || !confirm("Удалить машину " + formatTruckShort(t) + "?")) return;
+  DB.trucks = DB.trucks.filter(x => x.id !== id);
+  DB.drivers.forEach(d => { if (Number(d.truck_id) === Number(id)) d.truck_id = null; });
+  saveStore(DB); toast("Удалено"); showTab("sprav");
+}
+function assignTruckCarrier(truckId) {
+  const sel = document.getElementById("orphan-truck-" + truckId);
+  if (!sel || !sel.value) { toast("Выберите перевозчика"); return; }
+  const t = DB.trucks.find(x => x.id === truckId);
+  if (!t) return;
+  t.carrier_id = Number(sel.value);
+  saveStore(DB); toast("Привязано"); showTab("sprav");
+}
+function fillZayavkaTruckOptions(carrierId, selectedLine) {
+  const sel = document.getElementById("z-truck-pick");
+  if (!sel) return;
+  const list = carrierId != null ? trucksOfCarrier(carrierId) : [];
+  sel.innerHTML = `<option value="">— выбрать из справочника —</option>` +
+    list.map(t => `<option value="${esc(formatTruckShort(t))}" data-id="${t.id}">${esc(formatTruckShort(t))}</option>`).join("");
+  if (selectedLine) {
+    const hit = list.find(t => formatTruckShort(t) === selectedLine || (t.line||"") === selectedLine);
+    if (hit) sel.value = formatTruckShort(hit);
+  }
+  sel.onchange = () => {
+    if (sel.value) {
+      const inp = document.getElementById("z-truck");
+      if (inp) inp.value = sel.value;
+    }
+  };
+}
 function renderSprav() {
   let html = `<h1>Справочник</h1>
   <div class="card"><div class="field wide"><label>Поиск по ФИО</label>
@@ -1472,14 +2064,15 @@ function renderSprav() {
   <div class="card"><h2>Перевозчики</h2>
   <div class="toolbar"><button class="btn small" onclick="editCarrier(null)">+ Добавить перевозчика</button></div>
   <div id="carrier-edit"></div>
-  <table><thead><tr><th>Тип</th><th>ФИО / название</th><th>ИНН</th><th>Телефон</th><th>Рейсы</th><th>Банк</th><th>р/с</th><th></th></tr></thead><tbody>`;
+  <table><thead><tr><th>Тип</th><th>ФИО / название</th><th>ИНН</th><th>Телефон</th><th>Машины</th><th>Рейсы</th><th>Банк</th><th>р/с</th><th></th></tr></thead><tbody>`;
   for (const c of DB.carriers) {
     const trips = tripsOfCarrier(c);
     const noteShort = c.notes ? `<div class="muted" style="font-size:.8rem">${esc(String(c.notes).slice(0,80))}${String(c.notes).length>80?"…":""}</div>` : "";
-    html += `<tr class="sprav-row" data-fio="${esc((c.full_name||"")+" "+(c.short_name||"")+" "+(c.signatory||""))}"><td>${esc(c.type)}</td><td>${esc(c.full_name)}${noteShort}</td><td>${esc(c.inn)}</td><td>${esc(c.phone)}</td><td>${renderTripsCell(trips)}</td><td>${esc(c.bank)}</td><td class="mono">${esc(c.rs)}</td><td><button class="btn small ghost" onclick="editCarrier(${c.id})">Изменить</button></td></tr>`;
+    html += `<tr class="sprav-row" data-fio="${esc((c.full_name||"")+" "+(c.short_name||"")+" "+(c.signatory||""))}"><td>${esc(c.type)}</td><td>${esc(c.full_name)}${noteShort}</td><td>${esc(c.inn)}</td><td>${esc(c.phone)}</td><td>${renderCarrierTrucksCell(c)}</td><td>${renderTripsCell(trips)}</td><td>${esc(c.bank)}</td><td class="mono">${esc(c.rs)}</td><td><button class="btn small ghost" onclick="editCarrier(${c.id})">Изменить</button></td></tr>`;
   }
-  html += `</tbody></table></div>
-  <div class="card"><h2>Водители</h2>
+  html += `</tbody></table></div>`;
+  html += renderUnlinkedTrucksBlock();
+  html += `<div class="card"><h2>Водители</h2>
   <div class="toolbar"><button class="btn small" onclick="editDriver(null)">+ Добавить водителя</button></div>
   <div id="driver-edit"></div>
   <table><thead><tr><th>ФИО</th><th>Права</th><th>Телефон</th><th>Рейсы</th><th></th></tr></thead><tbody>`;
@@ -1492,14 +2085,9 @@ function renderSprav() {
     if (d.notes) extras.push(`<div class="muted" style="font-size:.8rem">${esc(String(d.notes).slice(0,90))}${String(d.notes).length>90?"…":""}</div>`);
     html += `<tr class="sprav-row" data-fio="${esc(d.full_name||"")}"><td>${esc(d.full_name)}${extras.join("")}</td><td>${esc(d.license_number)}</td><td>${esc(d.phone)}</td><td>${renderTripsCell(trips)}</td><td><button class="btn small ghost" onclick="editDriver(${d.id})">Изменить</button></td></tr>`;
   }
-  html += `</tbody></table></div>
-  <div class="card"><h2>Машины</h2><table><thead><tr><th>Строка в заявке</th><th>Тягач</th><th>Прицеп</th></tr></thead><tbody>`;
-  for (const t of DB.trucks) {
-    const owner = sprvTruckOwner(t);
-    html += `<tr class="sprav-row" data-fio="${esc(owner)}"><td>${esc(t.line||t.notes)}</td><td>${esc(t.brand)} ${esc(t.tractor_number)}</td><td>${esc(t.trailer_brand)} ${esc(t.trailer_number)}</td></tr>`;
-  }
-  return html + `</tbody></table>
-  <p class="note">Новых перевозчиков программа запоминает сама, когда вы сохраняете заявку с ИНН. Рейсы считаются из вкладки «Рейсы» и из заявок.</p></div>`;
+  html += `</tbody></table>
+  <p class="note">Новых перевозчиков программа запоминает сама, когда вы сохраняете заявку с ИНН. Машины хранятся у перевозчика. Рейсы считаются из вкладки «Рейсы» и из заявок.</p></div>`;
+  return html;
 }
 function sprvTruckOwner(t) {
   const names = [];
@@ -1530,6 +2118,7 @@ function editCarrier(id) {
       <button class="btn ghost" onclick="document.getElementById('carrier-edit').innerHTML=''">Отмена</button>
       ${id==null?"":`<button class="btn ghost" style="color:#b91c1c!important" onclick="deleteCarrier(${id})">Удалить</button>`}
     </div></div>`;
+  if (id != null) f += renderTruckEditorList(id);
   const box = document.getElementById("carrier-edit");
   box.innerHTML = f;
   box.scrollIntoView({behavior:"smooth", block:"start"});
@@ -1558,6 +2147,7 @@ function deleteCarrier(id) {
   if (!c || !confirm("Удалить перевозчика " + (c.full_name||"") + "? Старые заявки не изменятся.")) return;
   DB.carriers = DB.carriers.filter(x => x.id !== id);
   DB.drivers.forEach(d => { if (d.carrier_id === id) d.carrier_id = null; });
+  DB.trucks.forEach(tr => { if (Number(tr.carrier_id) === Number(id)) tr.carrier_id = null; });
   saveStore(DB); toast("Удалено"); showTab("sprav");
 }
 const DRIVER_FIELDS = [
@@ -1708,26 +2298,36 @@ function bindTabHandlers(tab) {
     const cf = document.getElementById("z-copy-from");
     if (cf) cf.onchange = () => { if (cf.value) applyCopyFrom(cf.value); };
     const cp = document.getElementById("z-carrier-pick");
-    if (cp) cp.onchange = () => {
-      const c = DB.carriers.find(x => x.id === Number(cp.value));
-      if (c) {
-        fillCarrierFields(c);
-        const d = DB.drivers.find(x => x.carrier_id === c.id);
-        const t = DB.trucks.find(x => x.carrier_id === c.id);
-        if (d && d.block) document.getElementById("z-driver").value = d.block;
-        else if (d) {
-          let blk = d.full_name;
-          if (d.birth_date) blk += ", " + d.birth_date + " г.р.";
-          if (d.passport) blk += ", паспорт " + d.passport;
-          if (d.passport_issued) blk += ", выдан " + d.passport_issued;
-          if (d.address) blk += ", зарегистрирован по адресу: " + d.address;
-          if (d.license_number) blk += "\nВод удостоверение " + d.license_number + (d.license_issued ? ", выдано " + d.license_issued : "");
-          if (d.phone) blk += "\nТел. " + d.phone;
-          document.getElementById("z-driver").value = blk;
+    if (cp) {
+      const syncTrucks = () => {
+        const cid = cp.value ? Number(cp.value) : null;
+        fillZayavkaTruckOptions(cid, (document.getElementById("z-truck")||{}).value || "");
+      };
+      syncTrucks();
+      cp.onchange = () => {
+        const c = DB.carriers.find(x => x.id === Number(cp.value));
+        if (c) {
+          fillCarrierFields(c);
+          const d = DB.drivers.find(x => x.carrier_id === c.id);
+          if (d && d.block) document.getElementById("z-driver").value = d.block;
+          else if (d) {
+            let blk = d.full_name;
+            if (d.birth_date) blk += ", " + d.birth_date + " г.р.";
+            if (d.passport) blk += ", паспорт " + d.passport;
+            if (d.passport_issued) blk += ", выдан " + d.passport_issued;
+            if (d.address) blk += ", зарегистрирован по адресу: " + d.address;
+            if (d.license_number) blk += "\nВод удостоверение " + d.license_number + (d.license_issued ? ", выдано " + d.license_issued : "");
+            if (d.phone) blk += "\nТел. " + d.phone;
+            document.getElementById("z-driver").value = blk;
+          }
+          const trucks = trucksOfCarrier(c.id);
+          if (trucks.length === 1) {
+            document.getElementById("z-truck").value = formatTruckShort(trucks[0]);
+          }
         }
-        if (t) document.getElementById("z-truck").value = t.line || t.notes || "";
-      }
-    };
+        syncTrucks();
+      };
+    }
     const pr = document.getElementById("btn-print-z");
     if (pr) pr.onclick = () => { const z = DB.zayavki.find(x => x.id === previewZayavkaId); if (z) printZayavka(z); };
     const wd = document.getElementById("btn-word-z");
@@ -1749,19 +2349,56 @@ function bindTabHandlers(tab) {
   if (tab === "reisy") {
     const m = document.getElementById("trip-month");
     if (m) m.onchange = () => { window._tripMonth = m.value; showTab("reisy"); };
-    document.getElementById("btn-new-trip").onclick = () => { document.getElementById("trip-form-wrap").style.display = "block"; };
+    const bn = document.getElementById("btn-new-trip");
+    if (bn) bn.onclick = () => {
+      editingTripId = null;
+      showTab("reisy", { mode: "new" });
+      markTripFormClean();
+    };
     const st = document.getElementById("btn-save-trip");
-    if (st) st.onclick = saveTrip;
+    if (st) st.onclick = () => saveTrip(false);
+    const cancel = document.getElementById("btn-cancel-trip");
+    if (cancel) cancel.onclick = () => {
+      if (!confirmLeaveTripForm()) return;
+      tripFormBaseline = null; editingTripId = null; showTab("reisy");
+    };
+    const fill = document.getElementById("btn-fill-margin");
+    if (fill) fill.onclick = () => {
+      const hint = computeTripMarginHint(readTripForm());
+      const el = document.getElementById("t-margin");
+      if (el) el.value = String(hint.margin);
+      refreshTripMarginHint();
+    };
+    ["t-cr","t-car","t-extra","t-vat-pct","t-cr-vat","t-car-vat"].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", refreshTripMarginHint);
+      el.addEventListener("change", refreshTripMarginHint);
+    });
+    if (document.getElementById("t-date")) markTripFormClean();
     document.getElementById("btn-export-trips").onclick = exportTripsCSV;
+    document.querySelectorAll("[data-edit-trip]").forEach(b => b.onclick = () => {
+      editingTripId = Number(b.dataset.editTrip);
+      showTab("reisy", { mode: "edit", id: editingTripId });
+    });
     document.querySelectorAll("[data-del-trip]").forEach(b => b.onclick = () => {
-      if (!confirm("Удалить рейс?")) return;
-      DB.trips = DB.trips.filter(t => t.id !== Number(b.dataset.delTrip));
+      if (!confirm("Удалить рейс? Импорт больше не вернёт его.")) return;
+      const id = Number(b.dataset.delTrip);
+      const trip = DB.trips.find(t => t.id === id);
+      if (trip) markTripDeleted(trip);
+      DB.trips = DB.trips.filter(t => t.id !== id);
       saveStore(DB); showTab("reisy");
     });
     document.querySelectorAll("[data-view]").forEach(b => b.onclick = (e) => {
       e.preventDefault(); previewZayavkaId = Number(b.dataset.view);
       showTab("zayavki",{mode:"preview", id: previewZayavkaId});
     });
+  }
+  if (tab === "home") {
+    bindHomeFeedHandlers();
+  }
+  if (tab === "pochta") {
+    bindPochtaHandlers();
   }
   if (tab === "backup") {
     document.getElementById("btn-export-bak").onclick = exportBackup;
@@ -1797,7 +2434,18 @@ window.addEventListener("hashchange", () => {
 });
 if (!handleHash()) showTab("home");
 
-/* === Карта (Leaflet + Esri tiles; OSRM только по клику) === */
+(function fillBlankTripMargins() {
+  let changed = false;
+  for (const t of (DB.trips || [])) {
+    if (t.margin === "" || t.margin == null || !Number.isFinite(Number(t.margin))) {
+      t.margin = computeTripMarginHint(t).margin;
+      changed = true;
+    }
+  }
+  if (changed) try { saveStore(DB); } catch (e) {}
+})();
+
+/* === Карта (Leaflet + Яндекс тайлы EPSG:3395; OSRM только по клику) === */
 const _LEAFLET_ICON = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABkAAAApCAYAAADAk4LOAAAFgUlEQVR4Aa1XA5BjWRTN2oW17d3YaZtr2962HUzbDNpjszW24mRt28p47v7zq/bXZtrp/lWnXr337j3nPCe85NcypgSFdugCpW5YoDAMRaIMqRi6aKq5E3YqDQO3qAwjVWrD8Ncq/RBpykd8oZUb/kaJutow8r1aP9II0WmLKLIsJyv1w/kqw9Ch2MYdB++12Onxee/QMwvf4/Dk/Lfp/i4nxTXtOoQ4pW5Aj7wpici1A9erdAN2OH64x8OSP9j3Ft3b7aWkTg/Fm91siTra0f9on5sQr9INejH6CUUUpavjFNq1B+Oadhxmnfa8RfEmN8VNAsQhPqF55xHkMzz3jSmChWU6f7/XZKNH+9+hBLOHYozuKQPxyMPUKkrX/K0uWnfFaJGS1QPRtZsOPtr3NsW0uyh6NNCOkU3Yz+bXbT3I8G3xE5EXLXtCXbbqwCO9zPQYPRTZ5vIDXD7U+w7rFDEoUUf7ibHIR4y6bLVPXrz8JVZEql13trxwue/uDivd3fkWRbS6/IA2bID4uk0UpF1N8qLlbBlXs4Ee7HLTfV1j54APvODnSfOWBqtKVvjgLKzF5YdEk5ewRkGlK0i33Eofffc7HT56jD7/6U+qH3Cx7SBLNntH5YIPvODnyfIXZYRVDPqgHtLs5ABHD3YzLuespb7t79FY34DjMwrVrcTuwlT55YMPvOBnRrJ4VXTdNnYug5ucHLBjEpt30701A3Ts+HEa73u6dT3FNWwflY86eMHPk+Yu+i6pzUpRrW7SNDg5JHR4KapmM5Wv2E8Tfcb1HoqqHMHU+uWDD7zg54mz5/2BSnizi9T1Dg4QQXLToGNCkb6tb1NU+QAlGr1++eADrzhn/u8Q2YZhQVlZ5+CAOtqfbhmaUCS1ezNFVm2imDbPmPng5wmz+gwh+oHDce0eUtQ6OGDIyR0uUhUsoO3vfDmmgOezH0mZN59x7MBi++WDL1g/eEiU3avlidO671bkLfwbw5XV2P8Pzo0ydy4t2/0eu33xYSOMOD8hTf4CrBtGMSoXfPLchX+J0ruSePw3LZeK0juPJbYzrhkH0io7B3k164hiGvawhOKMLkrQLyVpZg8rHFW7E2uHOL888IBPlNZ1FPzstSJM694fWr6RwpvcJK60+0HCILTBzZLFNdtAzJaohze60T8qBzyh5ZuOg5e7uwQppofEmf2++DYvmySqGBuKaicF1blQjhuHdvCIMvp8whTTfZzI7RldpwtSzL+F1+wkdZ2TBOW2gIF88PBTzD/gpeREAMEbxnJcaJHNHrpzji0gQCS6hdkEeYt9DF/2qPcEC8RM28Hwmr3sdNyht00byAut2k3gufWNtgtOEOFGUwcXWNDbdNbpgBGxEvKkOQsxivJx33iow0Vw5S6SVTrpVq11ysA2Rp7gTfPfktc6zhtXBBC+adRLshf6sG2RfHPZ5EAc4sVZ83yCN00Fk/4kggu40ZTvIEm5g24qtU4KjBrx/BTTH8ifVASAG7gKrnWxJDcU7x8X6Ecczhm3o6YicvsLXWfh3Ch1W0k8x0nXF+0fFxgt4phz8QvypiwCCFKMqXCnqXExjq10beH+UUA7+nG6mdG/Pu0f3LgFcGrl2s0kNNjpmoJ9o4B29CMO8dMT4Q5ox8uitF6fqsrJOr8qnwNbRzv6hSnG5wP+64C7h9lp30hKNtKdWjtdkbuPA19nJ7Tz3zR/ibgARbhb4AlhavcBebmTHcFl2fvYEnW0ox9xMxKBS8btJ+KiEbq9zA4RthQXDhPa0T9TEe69gWupwc6uBUphquXgf+/FrIjweHQS4/pduMe5ERUMHUd9xv8ZR98CxkS4F2n3EUrUZ10EYNw7BWm9x1GiPssi3GgiGRDKWRYZfXlON+dfNbM+GgIwYdwAAAAASUVORK5CYII=";
 const _LEAFLET_ICON_2X = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAABSCAMAAAAhFXfZAAAC91BMVEVMaXEzeak2f7I4g7g3g7cua5gzeKg8hJo3grY4g7c3grU0gLI2frE0daAubJc2gbQwd6QzeKk2gLMtd5sxdKIua5g1frA2f7IydaM0e6w2fq41fK01eqo3grgubJgta5cxdKI1f7AydaQydaMxc6EubJgvbJkwcZ4ubZkwcJwubZgubJcydqUydKIxapgubJctbJcubZcubJcvbJYubJcvbZkubJctbJctbZcubJg2f7AubJcrbZcubJcubJcua5g3grY0fq8ubJcubJdEkdEwhsw6i88vhswuhcsuhMtBjMgthMsrg8srgss6is8qgcs8i9A9iMYtg8spgcoogMo7hcMngMonf8olfso4gr8kfck5iM8jfMk4iM8he8k1fro7itAgesk2hs8eecgzfLcofssdeMg0hc4cd8g2hcsxeLQbdsgZdcgxeLImfcszhM0vda4xgckzhM4xg84wf8Yxgs4udKsvfcQucqhUndROmdM1fK0wcZ8vb5w0eqpQm9MzeKhXoNVcpdYydKNWn9VZotVKltJFjsIwcJ1Rms9OlslLmtH///8+kc9epdYzd6dbo9VHkMM2f7FHmNBClM8ydqVcpNY9hro3gLM9hLczealQmcw3fa46f7A8gLMxc6I3eagyc6FIldJMl9JSnNRSntNNl9JPnNJFi75UnM9ZodVKksg8kM45jc09e6ZHltFBk883gbRBh7pDk9EwcaBzn784g7dKkcY2i81Om9M7j85Llc81is09g7Q4grY/j9A0eqxKmdFFltBEjcXf6fFImdBCiLxJl9FGlNFBi78yiMxVndEvbpo6js74+vx+psPP3+o/ks5HkcpGmNCjwdZCkNDM3ehYoNJEls+lxNkxh8xHks0+jdC1zd5Lg6r+/v/H2ufz9/o3jM3t8/edvdM/k89Th61OiLBSjbZklbaTt9BfptdjmL1AicBHj8hGk9FAgK1dkLNTjLRekrdClc/k7fM0icy0y9tgp9c4jc2NtM9Dlc8zicxeXZn3AAAAQ3RSTlMAHDdTb4yPA+LtnEQmC4L2EmHqB7XA0d0sr478x4/Yd5i1zOfyPkf1sLVq4Nh3FvjxopQ2/STNuFzUwFIwxKaejILpIBEV9wAABhVJREFUeF6s1NdyFEcYBeBeoQIhRAkLlRDGrhIgY3BJL8CVeKzuyXFzzjkn5ZxzzuScg3PO8cKzu70JkO0LfxdTU//pM9vTu7Xgf6KqOVTb9X7toRrVEfBf1HTVjZccrT/2by1VV928Yty9ZbVuucdz90frG8DBjl9pVApbOstvmMuvVgaNXSfAAd6pGxpy6yxf5ph43pS/4f3uoaGm2rdu72S9xzOvMymkZFq/ptDrk90mhW7e4zl7HLzhxGWPR20xmSxJ/VqldG5m9XhaVOA1DadsNh3Pu5L2N6QtPO/32JpqQBVVk20oy/Pi2s23WEvyfHbe1thadVQttvm7Llf65gGmXK67XtupyoM7HQhmXdLS8oGWJNeOJ3C5fG5XCEJnkez3/oFdsvgJ4l2ANZwhrJKk/7OSXa+3Vw2WJMlKnGkobouYk6T0TyX30klOUnTD9HJ5qpckL3EW/w4XF3Xd0FGywXUrstrclVsqz5Pd/sXFYyDnPdrLcQODmGOK47IZb4CmibmMn+MYRzFZ5jg33ZL/EJrWcszHmANy3ARBK/IXtciJy8VsitPSdE3uuHxzougojcUdr8/32atnz/ev3f/K5wtpxUTpcaI45zusVDpYtZi+jg0oU9b3x74h7+n9ABvYEZeKaVq0sh0AtLKsFtqNBdeT0MrSzwwlq9+x6xAO4tgOtSzbCjrNQQiNvQUbUEubvzBUeGw26yDCsRHCoLkTHDa7IdOLIThs/gHvChszh2CimE8peRs47cxANI0lYNB5y1DljpOF0IhzBDPOZnDOqYYbeGKECbPzWnXludPphw5c2YBq5zlwXphIbO4VDCZ0gnPfUO1TwZoYwAs2ExPCedAu9DAjfQUjzITQb3jNj0KG2Sgt6BHaQUdYzWz+XmBktOHwanXjaSTcwwziBcuMOtwBmqPrTOxFQR/DRKKPqyur0aiW6cULYsx6tBm0jXpR/AUWR6HRq9WVW6MRhIq5jLyjbaCTDCijyYJNpCajdyobP/eTw0iexBAKkJ3gA5KcQb2zBXsIBckn+xVv8jkZSaEFHE+jFEleAEfayRU0MouNoBmB/L50Ai/HSLIHxcrpCvnhSQAuakKp2C/YbCylJjXRVy/z3+Kv/RrNcCo+WUzlVEhzKffnTQnxeN9fWF88fiNCUdSTsaufaChKWInHeysygfpIqagoakW+vV20J8uyl6TyNKEZWV4oRSPyCkWpgOLSbkCObT8o2r6tlG58HQquf6O0v50tB7JM7F4EORd2dx/K0w/KHsVkLPaoYrwgP/y7krr3SSMA4zj+OBgmjYkxcdIJQyQRKgg2viX9Hddi9UBb29LrKR7CVVEEEXWojUkXNyfTNDE14W9gbHJNuhjDettN3ZvbOvdOqCD3Jp/9l+/wJE+9PkYGjx/fqkys3S2rMozM/o2106rfMUINo6hVqz+eu/hd1c4xTg0TAfy5kV+4UG6+IthHTU9woWmxuKNbTfuCSfovBCxq7EtHqvYL4Sm6F8GVxsSXHMQ07TOi1DKtZxjWaaIyi4CXWjxPccUw8WVbMYY5wxC1mzEyXMJWkllpRloi+Kkoq69sxBTlElF6aAxYUbjXNlhlDZilDnM4U5SlN5biRsRHnbx3mbeWjEh4mEyiuJDl5XcWVmX5GvNkFgLWZM5qwsop4/AWfLhU1cR7k1VVvcYCWRkOI6Xy5gmnphCYIkvzuNYzHzosq2oNk2RtSs8khfUOfHIDgR6ysYBaMpl4uEgk2U/oJTs9AaTSwma7dT69geAE2ZpEjUsn2ieJNHeKfrI3EcAGJ2ZaNgVuC8EBctCLc57P5u5led6IOBkIYkuQMrmmjChs4VkfOerHqSBkPzZlhe06RslZ3zMjk2sscqKwY0RcjKK+LWbzd7KiHhkncs/siFJ+V5eXxD34B8nVuJEpGJNmxN2gH3vSvp7J70tF+D1Ej8qUJD1TkErAND2GZwTFg/LubvmgiBG3SOvdlsqFQrkEzJCL1rstlnVFROixZoDDSuXQFHESwVGlcuQcMb/b42NgjLowh5MTDFE3vNB5qStRIErdCQEh6pLPR92anSUb/wAIhldAaDMpGgAAAABJRU5ErkJggg==";
 const _LEAFLET_SHADOW = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACkAAAApCAQAAAACach9AAACMUlEQVR4Ae3ShY7jQBAE0Aoz/f9/HTMzhg1zrdKUrJbdx+Kd2nD8VNudfsL/Th///dyQN2TH6f3y/BGpC379rV+S+qqetBOxImNQXL8JCAr2V4iMQXHGNJxeCfZXhSRBcQMfvkOWUdtfzlLgAENmZDcmo2TVmt8OSM2eXxBp3DjHSMFutqS7SbmemzBiR+xpKCNUIRkdkkYxhAkyGoBvyQFEJEefwSmmvBfJuJ6aKqKWnAkvGZOaZXTUgFqYULWNSHUckZuR1HIIimUExutRxwzOLROIG4vKmCKQt364mIlhSyzAf1m9lHZHJZrlAOMMztRRiKimp/rpdJDc9Awry5xTZCte7FHtuS8wJgeYGrex28xNTd086Dik7vUMscQOa8y4DoGtCCSkAKlNwpgNtphjrC6MIHUkR6YWxxs6Sc5xqn222mmCRFzIt8lEdKx+ikCtg91qS2WpwVfBelJCiQJwvzixfI9cxZQWgiSJelKnwBElKYtDOb2MFbhmUigbReQBV0Cg4+qMXSxXSyGUn4UbF8l+7qdSGnTC0XLCmahIgUHLhLOhpVCtw4CzYXvLQWQbJNmxoCsOKAxSgBJno75avolkRw8iIAFcsdc02e9iyCd8tHwmeSSoKTowIgvscSGZUOA7PuCN5b2BX9mQM7S0wYhMNU74zgsPBj3HU7wguAfnxxjFQGBE6pwN+GjME9zHY7zGp8wVxMShYX9NXvEWD3HbwJf4giO4CFIQxXScH1/TM+04kkBiAAAAAElFTkSuQmCC";
@@ -1805,7 +2453,17 @@ const OSRM_URL = "https://router.project-osrm.org/route/v1/driving/";
 const TILE_ERROR_SWITCH_THRESHOLD = 4;
 const TILE_PROVIDERS = [
   {
+    id: "yandex",
+    crs: "EPSG3395",
+    url: "https://core-renderer-tiles.maps.yandex.net/tiles?l=map&x={x}&y={y}&z={z}&scale=1&lang=ru_RU",
+    options: {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://yandex.ru/maps/">Яндекс</a>'
+    }
+  },
+  {
     id: "esri",
+    crs: "EPSG3857",
     url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
     options: {
       maxZoom: 19,
@@ -1814,21 +2472,23 @@ const TILE_PROVIDERS = [
   },
   {
     id: "opentopomap",
+    crs: "EPSG3857",
     url: "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
     options: {
       maxZoom: 17, subdomains: "abc",
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> | &copy; <a href="https://opentopomap.org">OpenTopoMap</a>'
     }
-  },
-  {
-    id: "osmfr",
-    url: "https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",
-    options: {
-      maxZoom: 20, subdomains: "abc",
-      attribution: '&copy; <a href="https://www.openstreetmap.fr/">OSM France</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-    }
   }
 ];
+function providerCrs(prov) {
+  if (prov && prov.crs === "EPSG3395" && L.CRS && L.CRS.EPSG3395) return L.CRS.EPSG3395;
+  return (L.CRS && L.CRS.EPSG3857) || undefined;
+}
+function providerLabel(id) {
+  if (id === "yandex") return "Яндекс";
+  if (id === "esri") return "Esri";
+  return id || "";
+}
 let _mapInstances = {};
 let _mapLayerGroups = {}; // containerId -> featureGroup of routes
 let _mapItemLayers = {};  // itemId -> {line,m1,m2,group,item,path}
@@ -1857,11 +2517,44 @@ function destroyMap(id) {
   delete _mapLayerGroups[id];
   if (id === "karta-map") { _kartaInited = false; _mapItemLayers = {}; }
 }
+function switchTileProvider(containerId, providerIdx, view) {
+  _preferredTileProviderIdx = providerIdx;
+  const old = _mapInstances[containerId];
+  let center = (view && view.center) || [55.75, 37.62];
+  let zoom = (view && view.zoom) || 5;
+  if (old) {
+    try {
+      const c = old.getCenter();
+      center = [c.lat, c.lng];
+      zoom = old.getZoom();
+    } catch (e) {}
+  }
+  const wasKarta = containerId === "karta-map";
+  const keepSelected = _mapSelectedId;
+  destroyMap(containerId);
+  const map = ensureMap(containerId, { center, zoom });
+  if (wasKarta) {
+    _kartaInited = !!map;
+    _mapSelectedId = keepSelected;
+    _kartaUserZoomed = true;
+    if (typeof paintKartaRoutes === "function") paintKartaRoutes();
+    if (map) try { map.setView(center, zoom, { animate: false }); } catch (e) {}
+  }
+  return map;
+}
 function attachTileLayer(map, containerId, providerIdx) {
   const prov = TILE_PROVIDERS[providerIdx];
   if (!prov) return null;
+  const want = providerCrs(prov);
+  if (want && map.options.crs && map.options.crs !== want) {
+    return switchTileProvider(containerId, providerIdx);
+  }
   if (map._ipkTileLayer) { try { map.removeLayer(map._ipkTileLayer); } catch (e) {} }
-  const layer = L.tileLayer(prov.url, Object.assign({ updateWhenZooming: true, keepBuffer: 2 }, prov.options));
+  const layer = L.tileLayer(prov.url, Object.assign({
+    updateWhenZooming: true,
+    keepBuffer: 2,
+    errorTileUrl: ""
+  }, prov.options));
   let errCount = 0, switched = false;
   layer.on("tileerror", () => {
     errCount++;
@@ -1869,8 +2562,14 @@ function attachTileLayer(map, containerId, providerIdx) {
     switched = true;
     const next = providerIdx + 1;
     if (next < TILE_PROVIDERS.length) {
-      _preferredTileProviderIdx = next;
-      attachTileLayer(map, containerId, next);
+      const nextProv = TILE_PROVIDERS[next];
+      const nextCrs = providerCrs(nextProv);
+      if (nextCrs && map.options.crs && map.options.crs !== nextCrs) {
+        switchTileProvider(containerId, next);
+      } else {
+        _preferredTileProviderIdx = next;
+        attachTileLayer(map, containerId, next);
+      }
     } else {
       const banner = document.getElementById(containerId + "-offline");
       if (banner) { banner.hidden = false; banner.textContent = "Карта требует интернет"; }
@@ -1894,7 +2593,9 @@ function ensureMap(containerId, opts) {
     return map;
   }
   destroyMap(containerId);
-  map = L.map(el, {
+  const startIdx = Math.min(_preferredTileProviderIdx, TILE_PROVIDERS.length - 1);
+  const startProv = TILE_PROVIDERS[startIdx] || TILE_PROVIDERS[0];
+  const mapOpts = {
     zoomControl: true,
     attributionControl: true,
     scrollWheelZoom: true,
@@ -1905,8 +2606,11 @@ function ensureMap(containerId, opts) {
     dragging: true,
     zoomSnap: 0.5,
     zoomDelta: 0.5
-  });
-  attachTileLayer(map, containerId, Math.min(_preferredTileProviderIdx, TILE_PROVIDERS.length - 1));
+  };
+  const crs = providerCrs(startProv);
+  if (crs) mapOpts.crs = crs;
+  map = L.map(el, mapOpts);
+  attachTileLayer(map, containerId, startIdx);
   map.setView(opts.center || [55.75, 37.62], opts.zoom || 5);
   _mapInstances[containerId] = map;
   _mapLayerGroups[containerId] = L.featureGroup().addTo(map);
@@ -2106,7 +2810,7 @@ function renderKarta() {
   const months = [...new Set(items.map(i => String(i.date || "").slice(0, 7)).filter(m => m.length === 7))].sort().reverse();
   return `<h1>Карта</h1>
   <div class="warn-box">${online
-    ? "Линии сразу по прямой (оценка). По клику на маршрут — уточнение по дорогам (OSRM). Масштаб: колёсико / кнопки +/−."
+    ? "Подложка: Яндекс.Карты (русские подписи). Линии сразу по прямой; по клику — маршрут по дорогам. Масштаб: колёсико / +/−. При сбое тайлов — запасной Esri."
     : "Карта требует интернет — тайлы недоступны офлайн."}</div>
   <div class="map-toolbar">
     <label class="check"><input type="checkbox" id="map-show-z" checked> Заявки <span class="map-leg map-leg-z"></span></label>
@@ -2182,7 +2886,11 @@ function paintKartaRoutes(opts) {
   }
   try { map.invalidateSize({ animate: false }); } catch (e) {}
   const ms = Math.round(performance.now() - t0);
-  if (status) status.textContent = `На карте: ${drawn}` + (skipped ? ` · без координат: ${skipped}` : "") + ` · ${ms} мс`;
+  if (status) {
+    const prov = map._ipkTileProvider ? providerLabel(map._ipkTileProvider) : "";
+    status.textContent = `На карте: ${drawn}` + (skipped ? ` · без координат: ${skipped}` : "")
+      + (prov ? ` · ${prov}` : "") + ` · ${ms} мс`;
+  }
   _kartaInited = true;
 }
 async function selectMapItem(id, opts) {
@@ -2277,4 +2985,168 @@ async function renderStavkiMapPanel(from, to) {
       try { map.fitBounds(line.getBounds().pad(0.2), { animate: true, maxZoom: 9 }); } catch (e) {}
     }
   } catch (e) {}
+}
+/* === Почта / лента запросов (mail_public.json) === */
+function mergeMailFeed(items) {
+  if (!Array.isArray(items) || !items.length) return 0;
+  if (!DB.mail_feed) DB.mail_feed = [];
+  const byId = {};
+  for (const it of DB.mail_feed) if (it && it.id) byId[it.id] = it;
+  let added = 0, updated = 0;
+  for (const raw of items) {
+    if (!raw || !raw.id) continue;
+    const row = {
+      id: String(raw.id),
+      date: String(raw.date || "").slice(0, 10),
+      type: String(raw.type || "прочее"),
+      source: String(raw.source || ""),
+      company: String(raw.company || ""),
+      subject: String(raw.subject || ""),
+      route: String(raw.route || ""),
+      container: String(raw.container || ""),
+      weight: String(raw.weight || ""),
+      rate: String(raw.rate || ""),
+      summary: String(raw.summary || "")
+    };
+    // defensive: never keep forbidden keys
+    if (byId[row.id]) {
+      const prev = byId[row.id];
+      let changed = false;
+      for (const k of Object.keys(row)) {
+        if (row[k] && row[k] !== prev[k]) { prev[k] = row[k]; changed = true; }
+      }
+      if (changed) updated++;
+    } else {
+      DB.mail_feed.push(row);
+      byId[row.id] = row;
+      added++;
+    }
+  }
+  if (added || updated) {
+    DB.mail_feed.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    saveStore(DB);
+  }
+  return added;
+}
+function mailTypeOptions() {
+  return ["", "запрос ставки", "заявка", "отклик перевозчика", "ставка рынка", "прочее"];
+}
+function filterMailItems(q, typ, src) {
+  const qq = String(q || "").toLowerCase().trim();
+  let items = (DB.mail_feed || []).slice();
+  if (typ) items = items.filter(it => it.type === typ);
+  if (src) items = items.filter(it => it.source === src);
+  if (qq) {
+    items = items.filter(it => {
+      const blob = [it.company, it.subject, it.route, it.container, it.summary, it.rate, it.weight]
+        .join(" ").toLowerCase();
+      return blob.indexOf(qq) >= 0;
+    });
+  }
+  items.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  return items;
+}
+function renderMailCard(it, seen) {
+  const isNew = it.id && !seen[it.id];
+  return `<div class="card mail-item${isNew ? " is-new" : ""}" data-mail-id="${esc(it.id || "")}">
+    <div class="mail-head">
+      <strong>${esc(fmtDate(it.date))}</strong>
+      <span class="chip">${esc(it.type || "")}</span>
+      <span class="chip muted">${esc(it.source || "")}</span>
+      ${isNew ? `<span class="chip badge-new">новое</span>` : ""}
+      ${it.company ? `<span>${esc(it.company)}</span>` : ""}
+    </div>
+    <div class="mail-subj">${esc(it.subject || "без темы")}</div>
+    <div class="muted">${esc(it.route || "")}${it.container ? " · " + esc(it.container) : ""}${it.weight ? " · " + esc(it.weight) : ""}</div>
+    ${it.rate ? `<div><strong>${esc(it.rate)}</strong></div>` : ""}
+    ${it.summary ? `<div class="muted">${esc(it.summary)}</div>` : ""}
+    ${isNew ? `<button type="button" class="btn small ghost" data-mail-seen="${esc(it.id)}">отметить просмотренным</button>` : ""}
+  </div>`;
+}
+function renderPochta() {
+  const q = window._mailQ || "";
+  const typ = window._mailType || "";
+  const src = window._mailSrc || "";
+  const seen = loadMailSeenIds();
+  const items = filterMailItems(q, typ, src);
+  const typeOpts = mailTypeOptions().map(t =>
+    `<option value="${esc(t)}" ${t === typ ? "selected" : ""}>${t ? esc(t) : "Все типы"}</option>`
+  ).join("");
+  return `<h1>Почта</h1>
+  <div class="warn-box">Лента из публичного обновления: только компания, маршрут и ставка — без телефонов, ФИО и реквизитов.</div>
+  <div class="card">
+    <div class="row">
+      <div class="field wide"><label>Поиск</label>
+        <input id="mail-q" type="search" value="${esc(q)}" placeholder="компания, маршрут, контейнер…"></div>
+      <div class="field"><label>Тип</label><select id="mail-type">${typeOpts}</select></div>
+      <div class="field"><label>Источник</label>
+        <select id="mail-src">
+          <option value="" ${!src ? "selected" : ""}>Все</option>
+          <option value="почта" ${src === "почта" ? "selected" : ""}>почта</option>
+          <option value="MAX" ${src === "MAX" ? "selected" : ""}>MAX</option>
+        </select></div>
+    </div>
+    <div class="toolbar">
+      <button type="button" class="btn secondary" id="btn-mail-refresh">Обновить</button>
+      <button type="button" class="btn ghost" id="btn-mail-seen-all">Отметить все просмотренными</button>
+      <span class="muted" id="mail-count">Показано: ${items.length}</span>
+    </div>
+  </div>
+  <div id="mail-list">${items.length ? items.map(it => renderMailCard(it, seen)).join("") : `<p class="muted">Ничего не найдено</p>`}</div>`;
+}
+function bindMailSeenButtons(root) {
+  (root || document).querySelectorAll("[data-mail-seen]").forEach(b => {
+    b.onclick = () => {
+      markMailSeen(b.dataset.mailSeen);
+      updateHomeTabBadge();
+      if (currentTab === "home") showTab("home");
+      else if (currentTab === "pochta") showTab("pochta");
+    };
+  });
+}
+function bindHomeFeedHandlers() {
+  const r = document.getElementById("btn-refresh-feed");
+  if (r) r.onclick = () => {
+    if (typeof checkForUpdates === "function") checkForUpdates({ manual: true });
+    else toast("Обновление недоступно офлайн");
+  };
+  const a = document.getElementById("btn-mark-all-seen");
+  if (a) a.onclick = () => {
+    markAllMailSeen((DB.mail_feed || []).map(x => x.id));
+    updateHomeTabBadge();
+    showTab("home");
+  };
+  bindMailSeenButtons(document.getElementById("home-feed"));
+}
+function bindPochtaHandlers() {
+  const apply = () => {
+    window._mailQ = (document.getElementById("mail-q") || {}).value || "";
+    window._mailType = (document.getElementById("mail-type") || {}).value || "";
+    window._mailSrc = (document.getElementById("mail-src") || {}).value || "";
+    showTab("pochta");
+  };
+  const q = document.getElementById("mail-q");
+  if (q) {
+    let timer = null;
+    q.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(apply, 250);
+    });
+    q.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); apply(); } });
+  }
+  const typ = document.getElementById("mail-type");
+  if (typ) typ.onchange = apply;
+  const src = document.getElementById("mail-src");
+  if (src) src.onchange = apply;
+  const ref = document.getElementById("btn-mail-refresh");
+  if (ref) ref.onclick = () => {
+    if (typeof checkForUpdates === "function") checkForUpdates({ manual: true });
+  };
+  const all = document.getElementById("btn-mail-seen-all");
+  if (all) all.onclick = () => {
+    markAllMailSeen((DB.mail_feed || []).map(x => x.id));
+    updateHomeTabBadge();
+    showTab("pochta");
+  };
+  bindMailSeenButtons(document.getElementById("mail-list"));
 }
