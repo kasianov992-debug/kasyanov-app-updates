@@ -142,3 +142,29 @@ body.print-mode #print-root{display:block!important}
 @media(max-width:800px){.grid.two{grid-template-columns:1fr}}
 .nowrap{white-space:nowrap}
 .field.check{display:flex;align-items:center;gap:6px;margin-top:6px}
+
+/* Login + chat (1.0.7) */
+body.login-mode .app-shell{visibility:hidden}
+#login-overlay{position:fixed;inset:0;z-index:10000;background:linear-gradient(160deg,#0f3d2e 0%,#1a2332 60%,#0b6e4f 100%);display:flex;align-items:center;justify-content:center;padding:24px}
+#login-overlay[hidden]{display:none!important}
+.login-card{background:#fff;color:var(--ink);border-radius:16px;padding:28px 24px;max-width:420px;width:100%;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.login-card h1{margin:0 0 8px;font-size:1.35rem;color:#0f3d2e}
+.login-card .login-sub{color:var(--muted);margin:0 0 18px;font-size:.95rem}
+.login-card .field{margin-bottom:12px}
+.login-error{color:var(--err);min-height:1.2em;margin:8px 0 12px;font-weight:600;font-size:.92rem}
+.login-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:8px}
+.top #user-chip{font-size:.82rem;opacity:.95;background:rgba(255,255,255,.12);padding:4px 10px;border-radius:999px}
+.top #btn-logout{background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.28);border-radius:8px;padding:5px 12px;font:inherit;font-size:.85rem;font-weight:600;cursor:pointer}
+.top #btn-logout:hover{background:rgba(255,255,255,.22)}
+.chat-layout{display:grid;grid-template-columns:220px 1fr;gap:12px;min-height:420px}
+@media(max-width:800px){.chat-layout{grid-template-columns:1fr}}
+.chat-side{display:flex;flex-direction:column;gap:6px;padding:12px}
+.chat-chan{text-align:left;border:1px solid var(--line);background:#fff;border-radius:8px;padding:8px 10px;font:inherit;cursor:pointer}
+.chat-chan.active,.chat-chan:hover{border-color:var(--accent);background:var(--chip)}
+.chat-main{display:flex;flex-direction:column;padding:0;overflow:hidden}
+.chat-messages{flex:1;overflow:auto;padding:14px;max-height:480px;min-height:320px;background:#f8fafc}
+.chat-bubble{max-width:85%;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin:0 0 10px}
+.chat-bubble.mine{margin-left:auto;background:#e8f5ef;border-color:#b7e0cf}
+.chat-meta{font-size:.75rem;color:var(--muted);margin-bottom:4px}
+.chat-compose{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
+.chat-compose input{flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit}

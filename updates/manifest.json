@@ -1,7 +1,7 @@
 {
-  "version": "1.0.6",
-  "released_at": "2026-11-03T06:10:22Z",
-  "notes": "1.0.6: звуковой сигнал при новых запросах в почте, автообновление каждые 5 минут",
+  "version": "1.0.7",
+  "released_at": "2026-11-03T06:24:53Z",
+  "notes": "1.0.7: вход по логину/паролю, общий чат, облачная синхронизация данных (Supabase); убрана вкладка «Главное», бейдж новых запросов на «Почта»",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -20,8 +20,8 @@
   "code": {
     "js_url": "app.js",
     "css_url": "app.css",
-    "js_sha256": "790a2e7746ff9ae387326d8dfa84fa8d0412b73170dfcfd304947a91067d0e46",
-    "css_sha256": "e951247a124f00710f718511ea121d7b06b7f3518d898a9289b14cdfe55cd21b"
+    "js_sha256": "51e6a29e0810a17508a81f6f2046e95f737be569e6aebb54db8ae596ee2ca47a",
+    "css_sha256": "858eb494c38471148bf6f83e0de0c78d138aac9e742f7c9aaf4f0a1cbe13b6ed"
   },
   "data": {
     "quotes_url": "quotes_public.json",

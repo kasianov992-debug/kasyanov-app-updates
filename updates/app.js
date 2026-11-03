@@ -344,7 +344,7 @@ function executorTitle(c) {
   if (t === "ИП") return "ИП " + (c.full_name || "");
   return (c.type || "") + " " + (c.full_name || "");
 }
-let currentTab = "home", editingZayavkaId = null, previewZayavkaId = null;
+let currentTab = "pochta", editingZayavkaId = null, previewZayavkaId = null;
 let zayavkaFormBaseline = null; // JSON snapshot after open/save; null = not on form
 let zayavkaFormSaved = true;
 let editingTripId = null;
@@ -537,9 +537,13 @@ function countUnseenMail() {
   return n;
 }
 function updateHomeTabBadge() {
-  const btn = document.querySelector('#nav button[data-tab="home"]');
+  // legacy name: badge now lives on «Почта»
+  updatePochtaTabBadge();
+}
+function updatePochtaTabBadge() {
+  const btn = document.querySelector('#nav button[data-tab="pochta"]');
   const n = countUnseenMail();
-  if (btn) btn.textContent = n > 0 ? ("Главное (" + n + ")") : "Главное";
+  if (btn) btn.textContent = n > 0 ? ("Почта (" + n + ")") : "Почта";
   try {
     document.title = n > 0 ? ("(" + n + ") Почта") : DOC_TITLE_BASE;
   } catch (e) {}
@@ -568,92 +572,28 @@ function showTab(tab, opts) {
   if (currentTab === "karta" && tab !== "karta" && typeof destroyMap === "function") {
     try { destroyMap("karta-map"); } catch (e) {}
   }
+  if (tab === "home") tab = "pochta"; // вкладка «Главное» удалена
   currentTab = tab;
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   updateHomeTabBadge();
+  try { if (typeof updateChatTabBadge === "function") updateChatTabBadge(); } catch (e) {}
   const main = document.getElementById("main");
-  if (tab === "home") main.innerHTML = renderHome();
-  else if (tab === "zayavki") main.innerHTML = renderZayavki(opts);
+  if (tab === "zayavki") main.innerHTML = renderZayavki(opts);
   else if (tab === "stavki") main.innerHTML = renderStavki();
   else if (tab === "karta") main.innerHTML = renderKarta();
   else if (tab === "pochta") main.innerHTML = renderPochta();
   else if (tab === "reisy") main.innerHTML = renderReisy(opts);
   else if (tab === "sprav") main.innerHTML = renderSprav();
   else if (tab === "backup") main.innerHTML = renderBackup();
+  else if (tab === "chat") main.innerHTML = (typeof renderChat === "function" ? renderChat() : "<p>Чат недоступен</p>");
+  else main.innerHTML = renderPochta();
   bindTabHandlers(tab);
 }
 function renderHome() {
-  const z = DB.zayavki.length, tr = DB.trips.length, c = DB.carriers.length;
-  const q = BASE_QUOTES.length + (DB.quotes_extra||[]).length;
-  const seen = loadMailSeenIds();
-  const feed = (DB.mail_feed || []).slice().sort((a,b) => String(b.date||"").localeCompare(String(a.date||"")));
-  const latest = feed.slice(0, 12);
-  const unseen = latest.filter(it => it.id && !seen[it.id]).length;
-  let feedHtml = "";
-  if (!latest.length) {
-    feedHtml = `<p class="muted">Пока нет запросов. Нажмите «Обновить», чтобы подтянуть ленту (почта / MAX).</p>`;
-  } else {
-    for (const it of latest) {
-      const isNew = it.id && !seen[it.id];
-      feedHtml += `<div class="card mail-item${isNew?" is-new":""}" data-mail-id="${esc(it.id||"")}">
-        <div class="mail-head">
-          <strong>${esc(fmtDate(it.date))}</strong>
-          <span class="chip">${esc(it.type||"")}</span>
-          <span class="chip muted">${esc(it.source||"")}</span>
-          ${isNew?`<span class="chip badge-new">новое</span>`:""}
-          ${it.company?`<span>${esc(it.company)}</span>`:""}
-        </div>
-        <div class="mail-subj">${esc(it.subject||it.route||"без темы")}</div>
-        <div class="muted">${esc(it.route||"")}${it.container?" · "+esc(it.container):""}${it.weight?" · "+esc(it.weight):""}</div>
-        ${it.rate?`<div><strong>${esc(it.rate)}</strong></div>`:""}
-        ${it.summary?`<div class="muted">${esc(it.summary)}</div>`:""}
-        ${isNew?`<button type="button" class="btn small ghost" data-mail-seen="${esc(it.id)}">отметить просмотренным</button>`:""}
-      </div>`;
-    }
-  }
-  // compact market vs own + recent trips
-  const own = (BASE_QUOTES||[]).filter(x => (x.source||"")==="почта" || (x.who||"")==="owner").slice(-5).reverse();
-  const recentTrips = (DB.trips||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).slice(0,5);
-  let ratesHtml = own.length ? own.map(s =>
-    `<div class="src"><strong>${esc(fmtDate(s.date))}</strong> · ${esc(s.route_from||"")} → ${esc(s.route_to||"")}
-      · <strong>${esc(s.price_40 || s.price_20 || s.quote_raw || "")}</strong></div>`
-  ).join("") : `<p class="muted">Нет недавних ставок</p>`;
-  let tripsHtml = recentTrips.length ? recentTrips.map(t =>
-    `<div class="src"><strong>${esc(fmtDate(t.date))}</strong> · ${esc(t.route||"")} · ${esc(t.client||"")}
-      · маржа ${money(tripMarginValue(t))}</div>`
-  ).join("") : `<p class="muted">Нет рейсов</p>`;
-  return `<h1>Главное</h1>
-  <div class="card"><h2>Новые запросы ${unseen?`<span class="chip badge-new">${unseen}</span>`:""}</h2>
-    <div class="toolbar">
-      <button type="button" class="btn secondary" id="btn-refresh-feed" title="Подтянуть свежие запросы">⟳ Обновить</button>
-      <button type="button" class="btn ghost" id="btn-mark-all-seen">Все просмотрены</button>
-      <button type="button" class="btn ghost" onclick="showTab('pochta')">Вся почта</button>
-    </div>
-    <div class="muted" id="home-refresh-status">${esc(mailRefreshStatusText())}</div>
-    <div id="home-feed">${feedHtml}</div>
-  </div>
-  <div class="grid stats">
-    <div class="card stat"><div class="num">${z}</div><div class="lbl">Заявок</div></div>
-    <div class="card stat"><div class="num">${tr}</div><div class="lbl">Рейсов</div></div>
-    <div class="card stat"><div class="num">${c}</div><div class="lbl">Перевозчиков</div></div>
-    <div class="card stat"><div class="num">${q}</div><div class="lbl">Ставок в базе</div></div>
-  </div>
-  <div class="grid two">
-    <div class="card"><h2>Недавние ставки</h2>${ratesHtml}</div>
-    <div class="card"><h2>Недавние рейсы</h2>${tripsHtml}</div>
-  </div>
-  <div class="card">
-    <h2>Как пользоваться</h2>
-    <p>Откройте этот файл двойным щелчком в Chrome, Edge или Яндекс.Браузере. Интернет не нужен для заявок и ставок. Вкладки «Карта», «Почта» и автообновление требуют интернет.</p>
-    <p class="muted">Данные хранятся в этом браузере на этом компьютере. Сделайте «Резервную копию», если переходите на другой ПК.</p>
-    <div class="toolbar" style="margin-top:12px">
-      <button class="btn" onclick="showTab('zayavki',{mode:'new'})">Новая заявка</button>
-      <button class="btn secondary" onclick="showTab('stavki')">Подобрать ставку</button>
-      <button class="btn ghost" onclick="showTab('reisy')">Рейсы</button>
-      <button class="btn ghost" onclick="showTab('karta')">Карта</button>
-    </div>
-  </div>`;
+  // removed in 1.0.7 — redirect
+  return renderPochta();
 }
+
 function renderZayavki(opts) {
   opts = opts || {};
   if (opts.mode === "new" || opts.mode === "edit") return renderZayavkaForm(opts.mode === "new" ? null : (opts.id || editingZayavkaId));
@@ -2350,7 +2290,7 @@ function importBackup(file) {
       if (!DB.quotes_extra) DB.quotes_extra = [];
       if (!DB.next) DB.next = {carrier:100,driver:100,truck:100,zayavka:100,trip:100,quote:100};
       if (!DB.imports_done) DB.imports_done = [];
-      saveStore(DB); applyVersionedImports(); toast("Копия загружена"); showTab("home");
+      saveStore(DB); applyVersionedImports(); toast("Копия загружена"); showTab("pochta");
     } catch (e) { alert("Не удалось прочитать файл: " + e.message); }
   };
   reader.readAsText(file, "utf-8");
@@ -2503,18 +2443,18 @@ function bindTabHandlers(tab) {
       showTab("zayavki",{mode:"preview", id: previewZayavkaId});
     });
   }
-  if (tab === "home") {
-    bindHomeFeedHandlers();
-  }
   if (tab === "pochta") {
     bindPochtaHandlers();
+  }
+  if (tab === "chat") {
+    if (typeof bindChatHandlers === "function") bindChatHandlers();
   }
   if (tab === "backup") {
     document.getElementById("btn-export-bak").onclick = exportBackup;
     document.getElementById("btn-import-bak").onchange = (e) => { if (e.target.files[0]) importBackup(e.target.files[0]); };
     document.getElementById("btn-reset").onclick = () => {
       if (!confirm("Сбросить все данные к исходным (Стец, Другов, Мамбетшаев)?")) return;
-      localStorage.removeItem(STORE_KEY); DB = loadStore(); applyVersionedImports(); toast("Сброшено"); showTab("home");
+      localStorage.removeItem(STORE_KEY); DB = loadStore(); applyVersionedImports(); toast("Сброшено"); showTab("pochta");
     };
   }
 }
@@ -2541,7 +2481,8 @@ window.addEventListener("hashchange", () => {
   if (!h || h === "#") return;
   if (!handleHash()) showTab(currentTab);
 });
-if (!handleHash()) showTab("home");
+/* boot deferred to bootCloudAuth() in 1.0.7 */
+window.__appLogicReady = true;
 
 (function fillBlankTripMargins() {
   let changed = false;
@@ -3360,8 +3301,7 @@ function bindMailSeenButtons(root) {
     b.onclick = () => {
       markMailSeen(b.dataset.mailSeen);
       updateHomeTabBadge();
-      if (currentTab === "home") showTab("home");
-      else if (currentTab === "pochta") showTab("pochta");
+      if (currentTab === "pochta") showTab("pochta");
     };
   });
 }
@@ -3376,7 +3316,7 @@ function bindHomeFeedHandlers() {
   if (a) a.onclick = () => {
     markAllMailSeen((DB.mail_feed || []).map(x => x.id));
     updateHomeTabBadge();
-    showTab("home");
+    showTab("pochta");
   };
   bindMailSeenButtons(document.getElementById("home-feed"));
 }
@@ -3436,5 +3376,531 @@ function startMailAutoRefresh() {
     if (typeof refreshMailFeed === "function") refreshMailFeed({ auto: true });
   }, MAIL_AUTO_REFRESH_MS);
 }
-try { startMailAutoRefresh(); } catch (e) {}
+/* startMailAutoRefresh: after login via bootCloudAuth */
 
+/* === Cloud: Supabase auth, shared store sync, chat (v1.0.7) === */
+const SUPABASE_URL = "https://vourhkrahnbuugwfdgmt.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZvdXJoa3JhaG5idXVnd2ZkZ210Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2ODM2NjIsImV4cCI6MjEwOTI1OTY2Mn0._4KCTFhpI6SG1UljKQWaKHtBiPnnyXC83ZVEUKyqoZY";
+const CLOUD_STORE_KEY = "store";
+const CHAT_UNREAD_KEY = "ip_kasyanov_chat_unread_v1";
+
+window.__sb = null;
+window.__sbSession = null;
+window.__sbProfile = null;
+window.__sbProfiles = [];
+window.__cloudReady = false;
+window.__cloudOffline = false;
+window.__syncTimer = null;
+window.__syncing = false;
+window.__ignoreRemoteStoreUntil = 0;
+window.__chatChannel = "general";
+window.__chatMessages = [];
+window.__chatSub = null;
+window.__storeSub = null;
+
+function getSupabaseLib() {
+  return (window.supabase && window.supabase.createClient) ? window.supabase : null;
+}
+
+function initSupabaseClient() {
+  const lib = getSupabaseLib();
+  if (!lib) return null;
+  if (!window.__sb) {
+    window.__sb = lib.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+  }
+  return window.__sb;
+}
+
+function isLoggedIn() {
+  return !!(window.__sbSession && window.__sbSession.user);
+}
+
+function isOwner() {
+  return !!(window.__sbProfile && window.__sbProfile.role === "owner");
+}
+
+function setLoginError(msg) {
+  const el = document.getElementById("login-error");
+  if (el) el.textContent = msg || "";
+}
+
+function showLoginScreen(show) {
+  const overlay = document.getElementById("login-overlay");
+  const shell = document.querySelector(".app-shell");
+  if (overlay) overlay.hidden = !show;
+  if (shell) shell.style.visibility = show ? "hidden" : "visible";
+  document.body.classList.toggle("login-mode", !!show);
+}
+
+function updateUserChip() {
+  const el = document.getElementById("user-chip");
+  if (!el) return;
+  if (!isLoggedIn()) {
+    el.textContent = "";
+    el.hidden = true;
+    return;
+  }
+  const name = (window.__sbProfile && window.__sbProfile.display_name) ||
+    (window.__sbSession.user.email || "пользователь");
+  const role = window.__sbProfile && window.__sbProfile.role === "owner" ? "владелец" : "сотрудник";
+  el.hidden = false;
+  el.textContent = name + " · " + role;
+}
+
+async function loadProfile() {
+  const sb = initSupabaseClient();
+  if (!sb || !isLoggedIn()) return null;
+  const uid = window.__sbSession.user.id;
+  const { data, error } = await sb.from("profiles").select("id, display_name, role").eq("id", uid).maybeSingle();
+  if (error) throw error;
+  window.__sbProfile = data || null;
+  return data;
+}
+
+async function loadAllProfiles() {
+  const sb = initSupabaseClient();
+  if (!sb || !isLoggedIn()) return [];
+  const { data, error } = await sb.from("profiles").select("id, display_name, role").order("display_name");
+  if (error) throw error;
+  window.__sbProfiles = data || [];
+  return window.__sbProfiles;
+}
+
+function scheduleCloudSave() {
+  if (!isLoggedIn() || window.__cloudOffline) return;
+  if (window.__syncTimer) clearTimeout(window.__syncTimer);
+  window.__syncTimer = setTimeout(() => { pushStoreToCloud().catch(() => {}); }, 800);
+}
+
+const _origSaveStore = typeof saveStore === "function" ? saveStore : null;
+function saveStore(d) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(d)); } catch (e) {}
+  scheduleCloudSave();
+}
+
+async function pushStoreToCloud() {
+  const sb = initSupabaseClient();
+  if (!sb || !isLoggedIn() || window.__syncing) return;
+  window.__syncing = true;
+  try {
+    const value = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+    if (!value) return;
+    window.__ignoreRemoteStoreUntil = Date.now() + 1500;
+    const { error } = await sb.from("app_data").upsert({
+      key: CLOUD_STORE_KEY,
+      value,
+      updated_by: window.__sbSession.user.id,
+    });
+    if (error) throw error;
+  } catch (e) {
+    console.warn("cloud push failed", e);
+  } finally {
+    window.__syncing = false;
+  }
+}
+
+async function pullStoreFromCloud(opts) {
+  opts = opts || {};
+  const sb = initSupabaseClient();
+  if (!sb || !isLoggedIn()) return { ok: false, reason: "no_session" };
+  try {
+    const { data, error } = await sb.from("app_data").select("key, value, updated_at").eq("key", CLOUD_STORE_KEY).maybeSingle();
+    if (error) throw error;
+    if (!data || !data.value || typeof data.value !== "object") {
+      // Seed cloud from local once
+      const localRaw = localStorage.getItem(STORE_KEY);
+      if (localRaw) {
+        await pushStoreToCloud();
+        return { ok: true, seeded: true };
+      }
+      return { ok: true, empty: true };
+    }
+    const cloud = data.value;
+    if (!cloud.carriers) return { ok: false, reason: "bad_shape" };
+    window.__ignoreRemoteStoreUntil = Date.now() + 1500;
+    DB = cloud;
+    if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
+    if (!DB.deleted_trips) DB.deleted_trips = [];
+    if (!DB.mail_feed) DB.mail_feed = [];
+    if (!DB.mail_seen) DB.mail_seen = [];
+    if (!DB.quotes_extra) DB.quotes_extra = [];
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch (e) {}
+    try { applyVersionedImports(); } catch (e) {}
+    if (opts.rerender !== false) {
+      try { showTab(currentTab || "pochta"); } catch (e) {}
+    }
+    return { ok: true, pulled: true, updated_at: data.updated_at };
+  } catch (e) {
+    console.warn("cloud pull failed", e);
+    return { ok: false, reason: String(e && e.message || e) };
+  }
+}
+
+function subscribeStoreRealtime() {
+  const sb = initSupabaseClient();
+  if (!sb || !isLoggedIn()) return;
+  if (window.__storeSub) {
+    try { sb.removeChannel(window.__storeSub); } catch (e) {}
+    window.__storeSub = null;
+  }
+  window.__storeSub = sb.channel("app_data_store")
+    .on("postgres_changes", { event: "*", schema: "public", table: "app_data", filter: "key=eq.store" }, (payload) => {
+      if (Date.now() < window.__ignoreRemoteStoreUntil) return;
+      const row = payload.new || payload.old;
+      if (!row || !row.value || !row.value.carriers) return;
+      if (row.updated_by && window.__sbSession && row.updated_by === window.__sbSession.user.id) return;
+      DB = row.value;
+      if (!DB.mail_feed) DB.mail_feed = [];
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch (e) {}
+      try { showTab(currentTab || "pochta"); } catch (e) {}
+      try { toast("Данные обновлены с облака"); } catch (e) {}
+    })
+    .subscribe();
+}
+
+function dmChannelFor(otherId) {
+  const me = window.__sbSession && window.__sbSession.user && window.__sbSession.user.id;
+  if (!me || !otherId) return null;
+  const a = [me, otherId].sort();
+  return "dm:" + a[0] + ":" + a[1];
+}
+
+function loadChatUnreadMap() {
+  try { return JSON.parse(localStorage.getItem(CHAT_UNREAD_KEY) || "{}") || {}; } catch (e) { return {}; }
+}
+function saveChatUnreadMap(m) {
+  try { localStorage.setItem(CHAT_UNREAD_KEY, JSON.stringify(m || {})); } catch (e) {}
+}
+function bumpChatUnread(channel) {
+  if (!channel || channel === window.__chatChannel && currentTab === "chat") return;
+  const m = loadChatUnreadMap();
+  m[channel] = (m[channel] || 0) + 1;
+  saveChatUnreadMap(m);
+  updateChatTabBadge();
+}
+function clearChatUnread(channel) {
+  const m = loadChatUnreadMap();
+  if (m[channel]) { delete m[channel]; saveChatUnreadMap(m); }
+  updateChatTabBadge();
+}
+function totalChatUnread() {
+  const m = loadChatUnreadMap();
+  let n = 0;
+  for (const k of Object.keys(m)) n += Number(m[k]) || 0;
+  return n;
+}
+function updateChatTabBadge() {
+  const btn = document.querySelector('#nav button[data-tab="chat"]');
+  const n = totalChatUnread();
+  if (btn) btn.textContent = n > 0 ? ("Чат (" + n + ")") : "Чат";
+}
+
+async function loadChatMessages(channel) {
+  const sb = initSupabaseClient();
+  if (!sb || !isLoggedIn()) return [];
+  const { data, error } = await sb.from("chat_messages")
+    .select("id, channel, sender_id, body, created_at")
+    .eq("channel", channel)
+    .order("created_at", { ascending: true })
+    .limit(300);
+  if (error) throw error;
+  window.__chatMessages = data || [];
+  return window.__chatMessages;
+}
+
+async function sendChatMessage(text) {
+  const sb = initSupabaseClient();
+  if (!sb || !isLoggedIn()) throw new Error("no_session");
+  const body = String(text || "").trim();
+  if (!body) return;
+  const { error } = await sb.from("chat_messages").insert({
+    channel: window.__chatChannel || "general",
+    sender_id: window.__sbSession.user.id,
+    body,
+  });
+  if (error) throw error;
+}
+
+function subscribeChatRealtime() {
+  const sb = initSupabaseClient();
+  if (!sb || !isLoggedIn()) return;
+  if (window.__chatSub) {
+    try { sb.removeChannel(window.__chatSub); } catch (e) {}
+    window.__chatSub = null;
+  }
+  window.__chatSub = sb.channel("chat_messages_all")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "chat_messages" }, (payload) => {
+      const row = payload.new;
+      if (!row) return;
+      if (row.channel === window.__chatChannel) {
+        window.__chatMessages = (window.__chatMessages || []).concat([row]);
+        if (currentTab === "chat") {
+          try { renderChatMessagesIntoDom(); } catch (e) {}
+          clearChatUnread(row.channel);
+        } else {
+          bumpChatUnread(row.channel);
+          try { playMailNotifySound().catch(() => {}); } catch (e) {}
+        }
+      } else {
+        bumpChatUnread(row.channel);
+        if (currentTab !== "chat") {
+          try { playMailNotifySound().catch(() => {}); } catch (e) {}
+        } else {
+          updateChatTabBadge();
+        }
+      }
+    })
+    .subscribe();
+}
+
+function profileName(id) {
+  const p = (window.__sbProfiles || []).find(x => x.id === id);
+  if (p && p.display_name) return p.display_name;
+  if (window.__sbSession && window.__sbSession.user && window.__sbSession.user.id === id) return "Вы";
+  return (id || "").slice(0, 8);
+}
+
+function renderChatMessagesIntoDom() {
+  const box = document.getElementById("chat-messages");
+  if (!box) return;
+  const me = window.__sbSession && window.__sbSession.user && window.__sbSession.user.id;
+  const rows = window.__chatMessages || [];
+  box.innerHTML = rows.map(m => {
+    const mine = m.sender_id === me;
+    const t = m.created_at ? new Date(m.created_at).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" }) : "";
+    return `<div class="chat-bubble${mine ? " mine" : ""}">
+      <div class="chat-meta">${esc(profileName(m.sender_id))} · ${esc(t)} МСК</div>
+      <div class="chat-text">${esc(m.body)}</div>
+    </div>`;
+  }).join("") || `<p class="muted">Пока нет сообщений</p>`;
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderChat() {
+  const profiles = window.__sbProfiles || [];
+  const me = window.__sbSession && window.__sbSession.user && window.__sbSession.user.id;
+  const others = profiles.filter(p => p.id !== me);
+  const ch = window.__chatChannel || "general";
+  let side = `<button type="button" class="chat-chan${ch === "general" ? " active" : ""}" data-chat-ch="general">Общий</button>`;
+  for (const p of others) {
+    const c = dmChannelFor(p.id);
+    const unread = loadChatUnreadMap()[c] || 0;
+    side += `<button type="button" class="chat-chan${ch === c ? " active" : ""}" data-chat-ch="${esc(c)}">${esc(p.display_name || "Сотрудник")}${unread ? ` <span class="chip badge-new">${unread}</span>` : ""}</button>`;
+  }
+  let staffHtml = "";
+  if (isOwner()) {
+    const list = profiles.map(p =>
+      `<div class="src"><strong>${esc(p.display_name || "")}</strong> · ${p.role === "owner" ? "владелец" : "сотрудник"} · <span class="mono">${esc((p.id || "").slice(0, 8))}</span></div>`
+    ).join("") || `<p class="muted">Пока только вы</p>`;
+    staffHtml = `<div class="card" style="margin-top:16px">
+      <h2>Сотрудники</h2>
+      ${list}
+      <div class="toolbar" style="margin-top:10px">
+        <div class="field"><label>Email</label><input id="staff-email" type="email" placeholder="email@example.com"></div>
+        <div class="field"><label>Имя</label><input id="staff-name" type="text" placeholder="Имя"></div>
+        <div class="field"><label>Пароль</label><input id="staff-pass" type="password" placeholder="мин. 8 символов"></div>
+        <button type="button" class="btn" id="btn-create-staff">Создать сотрудника</button>
+      </div>
+      <p class="muted">Создание идёт через защищённую функцию (без service-ключа в программе).</p>
+    </div>`;
+  }
+  return `<h1>Чат</h1>
+  <div class="chat-layout">
+    <div class="card chat-side">${side}</div>
+    <div class="card chat-main">
+      <div id="chat-messages" class="chat-messages"></div>
+      <div class="chat-compose">
+        <input id="chat-input" type="text" maxlength="4000" placeholder="Сообщение…">
+        <button type="button" class="btn" id="btn-chat-send">Отправить</button>
+      </div>
+    </div>
+  </div>
+  ${staffHtml}`;
+}
+
+function bindChatHandlers() {
+  document.querySelectorAll("[data-chat-ch]").forEach(b => {
+    b.onclick = async () => {
+      window.__chatChannel = b.dataset.chatCh;
+      clearChatUnread(window.__chatChannel);
+      showTab("chat");
+    };
+  });
+  const send = async () => {
+    const inp = document.getElementById("chat-input");
+    const text = inp ? inp.value : "";
+    try {
+      await sendChatMessage(text);
+      if (inp) inp.value = "";
+      await loadChatMessages(window.__chatChannel);
+      renderChatMessagesIntoDom();
+    } catch (e) {
+      toast("Не удалось отправить: " + (e.message || e));
+    }
+  };
+  const btn = document.getElementById("btn-chat-send");
+  if (btn) btn.onclick = send;
+  const inp = document.getElementById("chat-input");
+  if (inp) inp.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); send(); }
+  });
+  const createBtn = document.getElementById("btn-create-staff");
+  if (createBtn) createBtn.onclick = async () => {
+    const email = (document.getElementById("staff-email") || {}).value || "";
+    const name = (document.getElementById("staff-name") || {}).value || "";
+    const pass = (document.getElementById("staff-pass") || {}).value || "";
+    try {
+      const sb = initSupabaseClient();
+      const { data, error } = await sb.functions.invoke("create-staff-user", {
+        body: { email, password: pass, display_name: name, role: "staff" },
+      });
+      if (error) throw error;
+      if (data && data.error) throw new Error(data.detail || data.error);
+      toast("Сотрудник создан");
+      await loadAllProfiles();
+      showTab("chat");
+    } catch (e) {
+      toast("Ошибка: " + (e.message || e));
+    }
+  };
+  loadChatMessages(window.__chatChannel || "general").then(() => {
+    renderChatMessagesIntoDom();
+    clearChatUnread(window.__chatChannel || "general");
+  }).catch(e => toast("Чат недоступен: " + (e.message || e)));
+}
+
+async function doLogout() {
+  const sb = initSupabaseClient();
+  try {
+    if (sb) await sb.auth.signOut();
+  } catch (e) {}
+  window.__sbSession = null;
+  window.__sbProfile = null;
+  showLoginScreen(true);
+  setLoginError("");
+  updateUserChip();
+}
+
+async function afterLoginSuccess() {
+  setLoginError("");
+  showLoginScreen(false);
+  updateUserChip();
+  try {
+    await loadProfile();
+    if (!window.__sbProfile) {
+      setLoginError("Нет доступа: аккаунт не добавлен владельцем. Обратитесь к Константину.");
+      await doLogout();
+      return;
+    }
+    updateUserChip();
+    await loadAllProfiles();
+    const pull = await pullStoreFromCloud({ rerender: false });
+    if (!pull.ok && pull.reason) {
+      window.__cloudOffline = true;
+      toast("Облако недоступно — работаю с локальной копией (только чтение облака)");
+    } else {
+      window.__cloudOffline = false;
+    }
+    subscribeStoreRealtime();
+    subscribeChatRealtime();
+    updateChatTabBadge();
+    if (!handleHash()) showTab("pochta");
+    try { startMailAutoRefresh(); } catch (e) {}
+  } catch (e) {
+    console.error(e);
+    setLoginError("Ошибка загрузки профиля: " + (e.message || e));
+    showLoginScreen(true);
+  }
+}
+
+async function doLogin(email, password) {
+  setLoginError("");
+  const sb = initSupabaseClient();
+  if (!sb) {
+    setLoginError("Не удалось загрузить библиотеку входа. Проверьте интернет и обновите страницу.");
+    return;
+  }
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({
+      email: String(email || "").trim(),
+      password: String(password || ""),
+    });
+    if (error) throw error;
+    window.__sbSession = data.session;
+    await afterLoginSuccess();
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/fetch|network|Failed to fetch|Load failed|timeout/i.test(msg)) {
+      setLoginError("Сервер недоступен (возможно, блокировка или медленный интернет). Можно открыть локальную копию без входа — только просмотр.");
+    } else {
+      setLoginError("Неверный логин или пароль");
+    }
+  }
+}
+
+function bindLoginUi() {
+  const form = document.getElementById("login-form");
+  if (form) {
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const email = (document.getElementById("login-email") || {}).value;
+      const pass = (document.getElementById("login-password") || {}).value;
+      doLogin(email, pass);
+    };
+  }
+  const offline = document.getElementById("btn-offline-local");
+  if (offline) offline.onclick = () => {
+    window.__cloudOffline = true;
+    window.__sbSession = null;
+    showLoginScreen(false);
+    updateUserChip();
+    toast("Офлайн: только локальные данные, без синхронизации и чата");
+    if (!handleHash()) showTab("pochta");
+  };
+  const out = document.getElementById("btn-logout");
+  if (out) out.onclick = () => { doLogout(); };
+}
+
+async function bootCloudAuth() {
+  bindLoginUi();
+  showLoginScreen(true);
+  const sb = initSupabaseClient();
+  if (!sb) {
+    setLoginError("Нет связи с сервером входа. Проверьте интернет или откройте офлайн.");
+    return;
+  }
+  try {
+    const { data, error } = await sb.auth.getSession();
+    if (error) throw error;
+    if (data && data.session) {
+      window.__sbSession = data.session;
+      await afterLoginSuccess();
+    } else {
+      showLoginScreen(true);
+    }
+    sb.auth.onAuthStateChange((event, session) => {
+      window.__sbSession = session;
+      if (!session) {
+        showLoginScreen(true);
+        updateUserChip();
+      }
+    });
+  } catch (e) {
+    const msg = String(e && e.message || e);
+    if (/fetch|network|Failed to fetch|Load failed|timeout/i.test(msg)) {
+      setLoginError("Сервер недоступен. Можно работать офлайн с локальной копией.");
+    } else {
+      setLoginError("Ошибка входа: " + msg);
+    }
+    showLoginScreen(true);
+  }
+}
+
+window.bootCloudAuth = bootCloudAuth;
+window.renderChat = renderChat;
+window.bindChatHandlers = bindChatHandlers;
+window.doLogout = doLogout;
+window.saveStore = saveStore;
+window.updateChatTabBadge = updateChatTabBadge;
