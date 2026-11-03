@@ -2755,25 +2755,28 @@ function renderRolis() {
       const demo = demoOn ? buildRolisDemo(r.container || ("zid:" + r.zayavkaId), r.terminal) : null;
       let demoCell = `<span class="rolis-muted">—</span>`;
       if (demo) {
-        const log = demo.events.map(ev => `<li><span class="rolis-demo-tag">демо</span> ${esc(ev.t)} — ${esc(ev.text)}</li>`).join("");
-        demoCell = `<div><strong>${esc(demo.status)}</strong> <span class="rolis-demo-tag">демо</span><div class="rolis-muted">${esc(demo.terminal)} · ${esc(demo.time)}</div><ul class="rolis-demo-log">${log}</ul></div>`;
+        const log = demo.events.map(ev => `<li>${esc(ev.t)} — ${esc(ev.text)}</li>`).join("");
+        demoCell = `<div class="rolis-demo-cell">
+          <div class="rolis-demo-status">${esc(demo.status)} <span class="rolis-demo-tag">демо</span></div>
+          <div class="rolis-demo-meta">${esc(demo.terminal)} · ${esc(demo.time)}</div>
+          <details class="rolis-demo-details"><summary>События</summary><ul class="rolis-demo-log">${log}</ul></details>
+        </div>`;
       }
       tableBody += `<tr data-rolis-idx="${i}">
         <td class="mono">${hasCont ? esc(r.container) : '<span class="rolis-muted">нет №</span>'}</td>
         <td>${esc(r.line)}</td>
-        <td>${esc(r.terminal)}<div class="rolis-muted">${esc(r.terminalFull)}</div></td>
-        <td>${esc(r.route)}</td>
-        <td>${esc(r.driver)}<div class="rolis-muted mono">${esc(r.truck)}</div></td>
+        <td><div class="rolis-clip">${esc(r.terminal)}</div><span class="rolis-sub">${esc(r.terminalFull)}</span></td>
+        <td><div class="rolis-clip">${esc(r.route)}</div></td>
+        <td>${esc(r.driver)}<span class="rolis-sub mono">${esc(r.truck)}</span></td>
         <td>${esc(fmtDate(r.date))}</td>
         <td class="rolis-status-cell">
-          <label class="rolis-muted">Статус в РОЛИС</label>
-          <input list="rolis-status-list" class="rolis-status-input" data-zid="${r.zayavkaId}" data-cont="${esc(r.container)}" value="${esc(man.status)}" placeholder="например: визит оформлен">
-          <textarea class="rolis-note-input" data-zid="${r.zayavkaId}" data-cont="${esc(r.container)}" placeholder="Заметка">${esc(man.note)}</textarea>
+          <input list="rolis-status-list" class="rolis-status-input" data-zid="${r.zayavkaId}" data-cont="${esc(r.container)}" value="${esc(man.status)}" placeholder="Статус, напр. визит оформлен" title="Статус в РОЛИС">
+          <textarea class="rolis-note-input" data-zid="${r.zayavkaId}" data-cont="${esc(r.container)}" placeholder="Заметка" title="Заметка">${esc(man.note)}</textarea>
         </td>
         <td>${demoCell}</td>
         <td class="rolis-actions">
           <button type="button" class="btn small" data-rolis-copy-num="${i}" ${hasCont ? "" : "disabled"}>Копировать №</button>
-          <button type="button" class="btn small secondary" data-rolis-copy-visit="${i}">Копировать данные для визита</button>
+          <button type="button" class="btn small secondary" data-rolis-copy-visit="${i}">Для визита</button>
         </td>
       </tr>`;
     }
@@ -2781,12 +2784,14 @@ function renderRolis() {
 
   return `<h1>РОЛИС</h1>
   <div class="card rolis-hero">
-    <div>
-      <a class="rolis-open" href="${ROLIS_LOGIN_URL}" target="_blank" rel="noopener noreferrer">Открыть РОЛИС</a>
-      <p class="rolis-muted" style="margin:10px 0 0;max-width:36rem">Вход на портал ДелоТех / КОНТЕРРА (rlisystems.ru). Встраивание в страницу недоступно; роботы и автозаполнение запрещены условиями сервиса — работайте вручную в их окне.</p>
+    <div class="rolis-hero-main">
+      <div class="toolbar">
+        <a class="btn" href="${ROLIS_LOGIN_URL}" target="_blank" rel="noopener noreferrer">Открыть РОЛИС</a>
+        <a class="btn ghost" href="${ROLIS_SERVICE_URL}" target="_blank" rel="noopener noreferrer">Услуги РОЛИС</a>
+      </div>
+      <p class="note" style="margin:0;max-width:40rem">Вход на портал ДелоТех / КОНТЕРРА (rlisystems.ru). Встраивание недоступно; работайте вручную в окне РОЛИС.</p>
     </div>
     <div class="rolis-links">
-      <div><a href="${ROLIS_SERVICE_URL}" target="_blank" rel="noopener noreferrer">Услуги РОЛИС</a></div>
       <div>Поддержка: <a href="mailto:office@rlisystems.ru">office@rlisystems.ru</a></div>
       <div>Тел.: <a href="tel:+78123357733">+7 (812) 335-77-33</a></div>
       <div class="rolis-muted">Терминалы: ПКТ, Петролеспорт, УЛКТ, НУТЭП, Янино и др.</div>
@@ -2795,14 +2800,14 @@ function renderRolis() {
 
   <div class="card">
     <h2>Мои контейнеры</h2>
-    <p class="rolis-muted">Собрано из заявок Магистрали. Паспортные данные в таблице и в буфере не передаются. Поле «Статус в РОЛИС» общее для сотрудников (сохраняется в облаке). Демо-столбец отдельно и в хранилище не пишется.</p>
+    <p class="note">Из заявок Магистрали. Паспортные данные не копируются. «Статус в РОЛИС» общий для сотрудников (облако). Демо-столбец локальный и не сохраняется.</p>
     <datalist id="rolis-status-list">${suggestOpts}</datalist>
     <div class="rolis-table-wrap">
       <table class="rolis-table">
         <thead><tr>
           <th>№ контейнера</th><th>Линия</th><th>Терминал / порт</th><th>Маршрут</th>
           <th>Водитель и авто</th><th>Дата</th><th>Статус в РОЛИС</th>
-          <th>Демо-статус терминала</th><th></th>
+          <th>Демо-статус</th><th>Действия</th>
         </tr></thead>
         <tbody>${tableBody}</tbody>
       </table>
@@ -2811,31 +2816,31 @@ function renderRolis() {
 
   <div class="card rolis-guide">
     <h2>Как оформить вывоз в РОЛИС</h2>
-    <p class="rolis-muted">Кратко по материалам <a href="https://www.rlisystems.ru/service/" target="_blank" rel="noopener noreferrer">rlisystems.ru/service</a> и описанию услуги «Вывоз контейнеров автотранспортом». Уточняйте актуальный порядок в личном кабинете и у поддержки РОЛИС.</p>
+    <p class="note">По материалам <a href="https://www.rlisystems.ru/service/" target="_blank" rel="noopener noreferrer">rlisystems.ru/service</a>. Уточняйте порядок в кабинете РОЛИС.</p>
     <ol>
-      <li><strong>Вход.</strong> Откройте портал по кнопке выше и войдите под учётной записью экспедитора (договор с ДелоТех / КОНТЕРРА).</li>
-      <li><strong>Визиты.</strong> Оформите автомобильный визит на вывоз импортного контейнера — по нему выдаётся <em>код визита</em>, нужный для въезда контейнеровоза на терминал. Услуга доступна на всех терминалах РОЛИС.</li>
-      <li><strong>Терминал и тайм-слот.</strong> Выберите терминал (ПКТ, Петролеспорт, УЛКТ, НУТЭП, Янино и др.) и доступное время / слот, если терминал его требует.</li>
-      <li><strong>Водитель и авто.</strong> Укажите водителя и тягач/полуприцеп (они должны быть аккредитованы / допущены на терминал в ресурсах автопредприятия).</li>
-      <li><strong>Доверенность с ЭП.</strong> На терминалах АО «ПКТ», ОАО «УЛКТ» и ООО «НУТЭП» релиз-ордер и доверенность на выдачу оформляются электронно и подписываются ЭП агента линии и экспедитора. Для этих терминалов экспедитору нужен сертификат ЭП (облачная ЭП или носитель с КриптоПро — по порядку ДелоТех). В мобильном приложении РОЛИС / ДелоТех для ряда терминалов доступны визиты на вывоз и сдача порожнего с облачной подписью.</li>
-      <li><strong>На терминале.</strong> Водитель использует код визита для въезда. На части терминалов ПСО можно подписать по SMS (ЭП водителя), иначе — в сервисном центре.</li>
+      <li><strong>Вход.</strong> Откройте портал и войдите как экспедитор (договор с ДелоТех / КОНТЕРРА).</li>
+      <li><strong>Визиты.</strong> Оформите автомобильный визит на вывоз — получите <em>код визита</em> для въезда на терминал.</li>
+      <li><strong>Терминал и слот.</strong> Выберите терминал (ПКТ, Петролеспорт, УЛКТ, НУТЭП, Янино и др.) и время, если требуется.</li>
+      <li><strong>Водитель и авто.</strong> Укажите допущенных на терминал водителя и тягач/полуприцеп.</li>
+      <li><strong>Доверенность с ЭП.</strong> На ПКТ, УЛКТ и НУТЭП релиз-ордер и доверенность подписываются ЭП (нужен сертификат экспедитора).</li>
+      <li><strong>На терминале.</strong> Водитель въезжает по коду визита; ПСО — по SMS или в сервисном центре.</li>
     </ol>
-    <p class="rolis-muted">Подготовка ЭП: КриптоПро CSP, драйверы Рутокен (если носитель), личный и корневые сертификаты, плагин браузера — см. <a href="https://www.rlisystems.ru/faq/" target="_blank" rel="noopener noreferrer">FAQ РОЛИС</a>. Вопросы: office@rlisystems.ru, +7 (812) 335-77-33.</p>
+    <p class="note">ЭП: КриптоПро, Рутокен, сертификаты — <a href="https://www.rlisystems.ru/faq/" target="_blank" rel="noopener noreferrer">FAQ РОЛИС</a>. Вопросы: office@rlisystems.ru, +7 (812) 335-77-33.</p>
   </div>
 
   <div class="card">
     <h2>Автоматические статусы</h2>
-    <div class="rolis-demo-banner">ДЕМО-РЕЖИМ: данные примерные, не из РОЛИС</div>
-    <p class="rolis-muted">Ниже — имитация статусов терминала по номеру контейнера (детерминированно). Это <strong>не</strong> живые данные РОЛИС и <strong>не</strong> перезаписывает поле «Статус в РОЛИС». В общее хранилище демо не сохраняется.</p>
+    <div class="rolis-demo-banner">Демо-режим: примерные данные, не из РОЛИС</div>
+    <p class="note">Имитация статуса по номеру контейнера. Не живые данные РОЛИС и не перезаписывает поле «Статус в РОЛИС». В облако не пишется.</p>
     <div class="toolbar">
       <button type="button" class="btn" id="rolis-demo-refresh">Обновить статусы (демо)</button>
       <button type="button" class="btn ghost" id="rolis-demo-toggle">${demoOn ? "Скрыть демо-столбец" : "Показать демо-статусы"}</button>
     </div>
     <div class="rolis-connect">
-      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+      <label style="display:flex;gap:8px;align-items:flex-start">
         <input type="checkbox" id="rolis-real-connect" disabled>
         <span><strong>Подключить настоящий РОЛИС</strong><br>
-        <span class="rolis-muted">Подключение официального веб-сервиса РОЛИС настроит ассистент позже (нужна отдельная учётка веб-сервиса). Пока доступен только демо-режим.</span></span>
+        <span class="rolis-muted">Официальный веб-сервис настроит ассистент позже. Пока только демо.</span></span>
       </label>
     </div>
   </div>`;
@@ -3817,12 +3822,22 @@ window.__chatMessages = [];
 window.__chatSub = null;
 window.__storeSub = null;
 
-/* Old HTML shells: inject Supabase (RU-reachable) + jsDelivr ahead of raw.githubusercontent. */
-const SUPABASE_UPDATE_REST =
-  "https://vourhkrahnbuugwfdgmt.supabase.co/rest/v1/app_updates?id=eq.current&select=*";
+/* Old HTML shells: inject Supabase (RU-reachable) + jsDelivr ahead of raw.githubusercontent.
+   Do not `const SUPABASE_UPDATE_REST` here — 1.1.1+ shells already declare it (would throw and blank the app). */
+function getSupabaseUpdateRestUrl() {
+  try {
+    if (typeof SUPABASE_UPDATE_REST === "string" && SUPABASE_UPDATE_REST) return SUPABASE_UPDATE_REST;
+  } catch (e) {}
+  try {
+    if (typeof window !== "undefined" && typeof window.SUPABASE_UPDATE_REST === "string" && window.SUPABASE_UPDATE_REST) {
+      return window.SUPABASE_UPDATE_REST;
+    }
+  } catch (e) {}
+  return "https://vourhkrahnbuugwfdgmt.supabase.co/rest/v1/app_updates?id=eq.current&select=*";
+}
 function preferUpdateMirrors() {
   try {
-    const sb = SUPABASE_UPDATE_REST;
+    const sb = getSupabaseUpdateRestUrl();
     const jsd = "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@main/updates/manifest.json";
     if (typeof UPDATE_URLS !== "undefined" && Array.isArray(UPDATE_URLS)) {
       if (UPDATE_URLS.indexOf(jsd) < 0) UPDATE_URLS.unshift(jsd);
@@ -4508,7 +4523,7 @@ async function fetchUpdateCandidate(url) {
 function updateUrlListAll() {
   const list = [];
   try {
-    if (typeof SUPABASE_UPDATE_REST === "string" && SUPABASE_UPDATE_REST) list.push(SUPABASE_UPDATE_REST);
+    list.push(getSupabaseUpdateRestUrl());
   } catch (e) {}
   if (typeof UPDATE_URLS !== "undefined" && Array.isArray(UPDATE_URLS)) {
     for (const u of UPDATE_URLS) if (u) list.push(u);
