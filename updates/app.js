@@ -586,6 +586,7 @@ function showTab(tab, opts) {
   else if (tab === "sprav") main.innerHTML = renderSprav();
   else if (tab === "backup") main.innerHTML = renderBackup();
   else if (tab === "chat") main.innerHTML = (typeof renderChat === "function" ? renderChat() : "<p>Чат недоступен</p>");
+  else if (tab === "rolis") main.innerHTML = (typeof renderRolis === "function" ? renderRolis() : "<p>РОЛИС недоступен</p>");
   else main.innerHTML = renderPochta();
   bindTabHandlers(tab);
 }
@@ -2449,6 +2450,9 @@ function bindTabHandlers(tab) {
   if (tab === "chat") {
     if (typeof bindChatHandlers === "function") bindChatHandlers();
   }
+  if (tab === "rolis") {
+    if (typeof bindRolisHandlers === "function") bindRolisHandlers();
+  }
   if (tab === "backup") {
     document.getElementById("btn-export-bak").onclick = exportBackup;
     document.getElementById("btn-import-bak").onchange = (e) => { if (e.target.files[0]) importBackup(e.target.files[0]); };
@@ -2482,6 +2486,421 @@ window.addEventListener("hashchange", () => {
   if (!handleHash()) showTab(currentTab);
 });
 /* boot deferred to bootCloudAuth() in 1.0.7 */
+
+/* === РОЛИС (вкладка Магистраль 1.1.0) === */
+const ROLIS_LOGIN_URL = "https://www.rlisystems.ru/webiom/login.jsf";
+const ROLIS_SERVICE_URL = "https://www.rlisystems.ru/service/";
+const ROLIS_STATUS_SUGGESTIONS = [
+  "визит оформлен",
+  "пропуск есть",
+  "на терминале",
+  "досмотр",
+  "выпуск разрешён",
+  "вывезен",
+  "сдан порожний"
+];
+const ROLIS_DEMO_STATUSES = [
+  "на терминале",
+  "досмотр назначен",
+  "выпуск разрешён",
+  "визит оформлен",
+  "вывезен",
+  "ожидает слот",
+  "сдан порожний"
+];
+const ROLIS_TERMINALS = [
+  "ПКТ", "Петролеспорт", "УЛКТ", "НУТЭП", "Янино",
+  "Нева-Металл", "Логистика-Терминал", "Терминал Врангель"
+];
+function ensureRolisStore() {
+  if (!DB.rolis || typeof DB.rolis !== "object") DB.rolis = {};
+  if (!DB.rolis.byKey || typeof DB.rolis.byKey !== "object") DB.rolis.byKey = {};
+  return DB.rolis;
+}
+
+function rolisKey(zayavkaId, container) {
+  return String(zayavkaId || "") + "|" + String(container || "").toUpperCase();
+}
+
+function extractContainerNumbers(text) {
+  const s = String(text || "").toUpperCase();
+  const re = /\b([A-Z]{4}\d{7})\b/g;
+  const out = [];
+  const seen = {};
+  let m;
+  while ((m = re.exec(s))) {
+    if (!seen[m[1]]) { seen[m[1]] = true; out.push(m[1]); }
+  }
+  return out;
+}
+
+function guessShippingLine(container, cargo) {
+  const pref = String(container || "").toUpperCase().slice(0, 4);
+  const map = {
+    ARKU: "Arkas", FYCU: "FESCO", TRHU: "Triton", AXIU: "Axis",
+    TCLU: "Textainer", DFSU: "Dong Fang", TCNU: "Textainer",
+    MSKU: "Maersk", CMAU: "CMA CGM", HLCU: "Hapag-Lloyd",
+    OOLU: "OOCL", SEGU: "Sea", BSIU: "Blue Sky", DRYU: "Dong Young"
+  };
+  if (map[pref]) return map[pref];
+  const c = String(cargo || "");
+  const m = c.match(/\b(Arkas|FESCO|Maersk|MSC|CMA|Hapag|OOCL|Evergreen|COSCO|ONE)\b/i);
+  return m ? m[1] : "—";
+}
+
+function detectRolisTerminal(load, unload) {
+  const blob = (String(load || "") + " | " + String(unload || "")).toUpperCase();
+  const rules = [
+    [/НУТЭП|NUTEP/, "НУТЭП"],
+    [/ПЕТРОЛЕСПОРТ|\bПЛП\b|PLP/, "Петролеспорт"],
+    [/\bПКТ\b|ПЕРВЫЙ (КОНТЕЙНЕРНЫЙ|КОНТЕЙН\.)/, "ПКТ"],
+    [/УЛКТ|УСТЬ-?ЛУГ/, "УЛКТ"],
+    [/ЯНИНО/, "Янино"],
+    [/НЕВА-?МЕТАЛЛ/, "Нева-Металл"],
+    [/ЛОГИСТИКА-?ТЕРМИНАЛ|ШУШАР/, "Логистика-Терминал"],
+    [/ВРАНГЕЛЬ/, "Терминал Врангель"],
+    [/МОБИ\s*ДИК|КРОНШТАДТ/, "МОБИ ДИК"],
+    [/НК-?ДЕПО/, "НК-Депо"],
+    [/\bНЛЭ\b/, "НЛЭ"]
+  ];
+  for (const [re, name] of rules) {
+    if (re.test(blob)) return name;
+  }
+  // fallback: first address fragment
+  const a = String(load || "").trim() || String(unload || "").trim();
+  return a ? a.split(",")[0].trim() : "—";
+}
+
+function driverNameOnly(driverBlock) {
+  let s = String(driverBlock || "").trim();
+  if (!s) return "—";
+  s = s.split(/\n/)[0];
+  s = s.split(/,\s*(?:паспорт|дата рождения|место рождения|тел\.?|вод(?:ительское)?|зарегистрирован)/i)[0];
+  s = s.replace(/,\s*$/, "").trim();
+  return s || "—";
+}
+
+function parseTruckTractorTrailer(truckLine) {
+  const raw = String(truckLine || "").trim();
+  if (!raw) return { tractor: "—", trailer: "—" };
+  const parts = raw.split(/\s*\/\s*/);
+  let left = parts[0] || "";
+  let right = parts.slice(1).join(" / ");
+  const plateLike = /([А-ЯЁA-Z]\s*\d{3}\s*[А-ЯЁA-Z]{2}\s*\d{2,3}|[А-ЯЁA-Z]\d{3}[А-ЯЁA-Z]{2}\d{2,3}|\d{4}\s*[А-ЯЁA-Z]{2}\s*\d{2,3})/i;
+  function pickPlate(chunk, wholeIfNone) {
+    const m = String(chunk || "").match(plateLike);
+    if (m) return m[1].replace(/\s+/g, " ").trim().toUpperCase();
+    const cleaned = String(chunk || "")
+      .replace(/^(марка|тягач|авто|полуприцеп|п\/п|прицеп)[:\s,]*/i, "")
+      .replace(/гос\.?\s*номер[:\s]*/i, "")
+      .trim();
+    return cleaned || (wholeIfNone ? String(chunk || "").trim() : "—");
+  }
+  // Prefer plate extraction from left/right
+  let tractor = pickPlate(left, true);
+  let trailer = right ? pickPlate(right, true) : "—";
+  // If left had brand+plate, pickPlate already got plate when possible
+  if (/гос\.?\s*номер/i.test(left)) {
+    const m = left.match(plateLike);
+    if (m) tractor = m[1].replace(/\s+/g, " ").trim().toUpperCase();
+  }
+  if (/полуприцеп|п\/п|прицеп/i.test(right || "")) {
+    const m = String(right).match(plateLike);
+    if (m) trailer = m[1].replace(/\s+/g, " ").trim().toUpperCase();
+  }
+  return { tractor: tractor || "—", trailer: trailer || "—" };
+}
+
+function buildRolisRows() {
+  ensureRolisStore();
+  const rows = [];
+  const list = (DB.zayavki || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id - a.id));
+  for (const z of list) {
+    const conts = extractContainerNumbers(z.cargo || "");
+    const route = [z.loading_address || "", z.unloading_address || ""].filter(Boolean).join(" → ") || "—";
+    const terminal = detectRolisTerminal(z.loading_address, z.unloading_address);
+    const driver = driverNameOnly(z.driver);
+    const truckParts = parseTruckTractorTrailer(z.truck);
+    const base = {
+      zayavkaId: z.id,
+      zayavkaNumber: z.number || "",
+      date: z.date || "",
+      route,
+      terminal,
+      terminalFull: z.loading_address || z.unloading_address || "—",
+      driver,
+      truck: z.truck || "—",
+      tractor: truckParts.tractor,
+      trailer: truckParts.trailer,
+      cargo: z.cargo || ""
+    };
+    if (conts.length) {
+      for (const c of conts) {
+        rows.push(Object.assign({}, base, {
+          container: c,
+          line: guessShippingLine(c, z.cargo)
+        }));
+      }
+    } else {
+      rows.push(Object.assign({}, base, {
+        container: "",
+        line: "—"
+      }));
+    }
+  }
+  return rows;
+}
+
+function getRolisManual(zayavkaId, container) {
+  ensureRolisStore();
+  const k = rolisKey(zayavkaId, container || ("zid:" + zayavkaId));
+  return DB.rolis.byKey[k] || { status: "", note: "" };
+}
+
+function setRolisManual(zayavkaId, container, status, note) {
+  ensureRolisStore();
+  const k = rolisKey(zayavkaId, container || ("zid:" + zayavkaId));
+  DB.rolis.byKey[k] = {
+    status: String(status || "").trim(),
+    note: String(note || "").trim(),
+    updated_at: new Date().toISOString()
+  };
+  saveStore(DB);
+}
+
+/** Deterministic demo hash from container / key (not saved). */
+function rolisDemoHash(str) {
+  let h = 2166136261;
+  const s = String(str || "EMPTY");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function buildRolisDemo(container, terminalHint) {
+  const h = rolisDemoHash(container || "NOCONT");
+  const status = ROLIS_DEMO_STATUSES[h % ROLIS_DEMO_STATUSES.length];
+  const term = terminalHint && terminalHint !== "—"
+    ? terminalHint
+    : ROLIS_TERMINALS[(h >>> 3) % ROLIS_TERMINALS.length];
+  // fake time today-ish from hash
+  const mins = h % (24 * 60);
+  const hh = String(Math.floor(mins / 60)).padStart(2, "0");
+  const mm = String(mins % 60).padStart(2, "0");
+  const dayOffset = h % 3;
+  const d = new Date();
+  d.setDate(d.getDate() - dayOffset);
+  const dateStr = d.toISOString().slice(0, 10);
+  const timeStr = dateStr + " " + hh + ":" + mm;
+  const events = [
+    { t: timeStr, text: "Контейнер зафиксирован на терминале «" + term + "»" },
+    { t: timeStr, text: "Текущий статус: " + status }
+  ];
+  if (status === "досмотр назначен" || status === "выпуск разрешён") {
+    events.push({ t: timeStr, text: "Таможенная операция (симуляция)" });
+  }
+  if (status === "визит оформлен" || status === "вывезен") {
+    events.push({ t: timeStr, text: "Код визита (симуляция): V" + String(100000 + (h % 900000)) });
+  }
+  return { status, terminal: term, time: timeStr, events, demo: true };
+}
+
+function formatVisitClipboard(row) {
+  const lines = [
+    "Контейнер: " + (row.container || "—"),
+    "Терминал: " + (row.terminalFull || row.terminal || "—"),
+    "Тягач: " + (row.tractor || "—"),
+    "Прицеп: " + (row.trailer || "—"),
+    "Водитель: " + (row.driver || "—"),
+    "Дата: " + (row.date || "—")
+  ];
+  return lines.join("\n");
+}
+
+async function copyTextRolis(text, okMsg) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    toast(okMsg || "Скопировано");
+  } catch (e) {
+    toast("Не удалось скопировать");
+  }
+}
+
+function renderRolis() {
+  ensureRolisStore();
+  const rows = buildRolisRows();
+  if (window.__rolisDemoOn == null) window.__rolisDemoOn = true;
+  const demoOn = !!window.__rolisDemoOn;
+  const suggestOpts = ROLIS_STATUS_SUGGESTIONS.map(s => `<option value="${esc(s)}">`).join("");
+
+  let tableBody = "";
+  if (!rows.length) {
+    tableBody = `<tr><td colspan="9" class="rolis-muted">Нет заявок — добавьте заявку во вкладке «Заявки», и контейнеры появятся здесь.</td></tr>`;
+  } else {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const man = getRolisManual(r.zayavkaId, r.container);
+      const hasCont = !!r.container;
+      const demo = demoOn ? buildRolisDemo(r.container || ("zid:" + r.zayavkaId), r.terminal) : null;
+      let demoCell = `<span class="rolis-muted">—</span>`;
+      if (demo) {
+        const log = demo.events.map(ev => `<li><span class="rolis-demo-tag">демо</span> ${esc(ev.t)} — ${esc(ev.text)}</li>`).join("");
+        demoCell = `<div><strong>${esc(demo.status)}</strong> <span class="rolis-demo-tag">демо</span><div class="rolis-muted">${esc(demo.terminal)} · ${esc(demo.time)}</div><ul class="rolis-demo-log">${log}</ul></div>`;
+      }
+      tableBody += `<tr data-rolis-idx="${i}">
+        <td class="mono">${hasCont ? esc(r.container) : '<span class="rolis-muted">нет №</span>'}</td>
+        <td>${esc(r.line)}</td>
+        <td>${esc(r.terminal)}<div class="rolis-muted">${esc(r.terminalFull)}</div></td>
+        <td>${esc(r.route)}</td>
+        <td>${esc(r.driver)}<div class="rolis-muted mono">${esc(r.truck)}</div></td>
+        <td>${esc(fmtDate(r.date))}</td>
+        <td class="rolis-status-cell">
+          <label class="rolis-muted">Статус в РОЛИС</label>
+          <input list="rolis-status-list" class="rolis-status-input" data-zid="${r.zayavkaId}" data-cont="${esc(r.container)}" value="${esc(man.status)}" placeholder="например: визит оформлен">
+          <textarea class="rolis-note-input" data-zid="${r.zayavkaId}" data-cont="${esc(r.container)}" placeholder="Заметка">${esc(man.note)}</textarea>
+        </td>
+        <td>${demoCell}</td>
+        <td class="rolis-actions">
+          <button type="button" class="btn small" data-rolis-copy-num="${i}" ${hasCont ? "" : "disabled"}>Копировать №</button>
+          <button type="button" class="btn small secondary" data-rolis-copy-visit="${i}">Копировать данные для визита</button>
+        </td>
+      </tr>`;
+    }
+  }
+
+  return `<h1>РОЛИС</h1>
+  <div class="card rolis-hero">
+    <div>
+      <a class="rolis-open" href="${ROLIS_LOGIN_URL}" target="_blank" rel="noopener noreferrer">Открыть РОЛИС</a>
+      <p class="rolis-muted" style="margin:10px 0 0;max-width:36rem">Вход на портал ДелоТех / КОНТЕРРА (rlisystems.ru). Встраивание в страницу недоступно; роботы и автозаполнение запрещены условиями сервиса — работайте вручную в их окне.</p>
+    </div>
+    <div class="rolis-links">
+      <div><a href="${ROLIS_SERVICE_URL}" target="_blank" rel="noopener noreferrer">Услуги РОЛИС</a></div>
+      <div>Поддержка: <a href="mailto:office@rlisystems.ru">office@rlisystems.ru</a></div>
+      <div>Тел.: <a href="tel:+78123357733">+7 (812) 335-77-33</a></div>
+      <div class="rolis-muted">Терминалы: ПКТ, Петролеспорт, УЛКТ, НУТЭП, Янино и др.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Мои контейнеры</h2>
+    <p class="rolis-muted">Собрано из заявок Магистрали. Паспортные данные в таблице и в буфере не передаются. Поле «Статус в РОЛИС» общее для сотрудников (сохраняется в облаке). Демо-столбец отдельно и в хранилище не пишется.</p>
+    <datalist id="rolis-status-list">${suggestOpts}</datalist>
+    <div class="rolis-table-wrap">
+      <table class="rolis-table">
+        <thead><tr>
+          <th>№ контейнера</th><th>Линия</th><th>Терминал / порт</th><th>Маршрут</th>
+          <th>Водитель и авто</th><th>Дата</th><th>Статус в РОЛИС</th>
+          <th>Демо-статус терминала</th><th></th>
+        </tr></thead>
+        <tbody>${tableBody}</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card rolis-guide">
+    <h2>Как оформить вывоз в РОЛИС</h2>
+    <p class="rolis-muted">Кратко по материалам <a href="https://www.rlisystems.ru/service/" target="_blank" rel="noopener noreferrer">rlisystems.ru/service</a> и описанию услуги «Вывоз контейнеров автотранспортом». Уточняйте актуальный порядок в личном кабинете и у поддержки РОЛИС.</p>
+    <ol>
+      <li><strong>Вход.</strong> Откройте портал по кнопке выше и войдите под учётной записью экспедитора (договор с ДелоТех / КОНТЕРРА).</li>
+      <li><strong>Визиты.</strong> Оформите автомобильный визит на вывоз импортного контейнера — по нему выдаётся <em>код визита</em>, нужный для въезда контейнеровоза на терминал. Услуга доступна на всех терминалах РОЛИС.</li>
+      <li><strong>Терминал и тайм-слот.</strong> Выберите терминал (ПКТ, Петролеспорт, УЛКТ, НУТЭП, Янино и др.) и доступное время / слот, если терминал его требует.</li>
+      <li><strong>Водитель и авто.</strong> Укажите водителя и тягач/полуприцеп (они должны быть аккредитованы / допущены на терминал в ресурсах автопредприятия).</li>
+      <li><strong>Доверенность с ЭП.</strong> На терминалах АО «ПКТ», ОАО «УЛКТ» и ООО «НУТЭП» релиз-ордер и доверенность на выдачу оформляются электронно и подписываются ЭП агента линии и экспедитора. Для этих терминалов экспедитору нужен сертификат ЭП (облачная ЭП или носитель с КриптоПро — по порядку ДелоТех). В мобильном приложении РОЛИС / ДелоТех для ряда терминалов доступны визиты на вывоз и сдача порожнего с облачной подписью.</li>
+      <li><strong>На терминале.</strong> Водитель использует код визита для въезда. На части терминалов ПСО можно подписать по SMS (ЭП водителя), иначе — в сервисном центре.</li>
+    </ol>
+    <p class="rolis-muted">Подготовка ЭП: КриптоПро CSP, драйверы Рутокен (если носитель), личный и корневые сертификаты, плагин браузера — см. <a href="https://www.rlisystems.ru/faq/" target="_blank" rel="noopener noreferrer">FAQ РОЛИС</a>. Вопросы: office@rlisystems.ru, +7 (812) 335-77-33.</p>
+  </div>
+
+  <div class="card">
+    <h2>Автоматические статусы</h2>
+    <div class="rolis-demo-banner">ДЕМО-РЕЖИМ: данные примерные, не из РОЛИС</div>
+    <p class="rolis-muted">Ниже — имитация статусов терминала по номеру контейнера (детерминированно). Это <strong>не</strong> живые данные РОЛИС и <strong>не</strong> перезаписывает поле «Статус в РОЛИС». В общее хранилище демо не сохраняется.</p>
+    <div class="toolbar">
+      <button type="button" class="btn" id="rolis-demo-refresh">Обновить статусы (демо)</button>
+      <button type="button" class="btn ghost" id="rolis-demo-toggle">${demoOn ? "Скрыть демо-столбец" : "Показать демо-статусы"}</button>
+    </div>
+    <div class="rolis-connect">
+      <label style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+        <input type="checkbox" id="rolis-real-connect" disabled>
+        <span><strong>Подключить настоящий РОЛИС</strong><br>
+        <span class="rolis-muted">Подключение официального веб-сервиса РОЛИС настроит ассистент позже (нужна отдельная учётка веб-сервиса). Пока доступен только демо-режим.</span></span>
+      </label>
+    </div>
+  </div>`;
+}
+
+function bindRolisHandlers() {
+  window.__rolisRowsCache = buildRolisRows();
+
+  document.querySelectorAll("[data-rolis-copy-num]").forEach(btn => {
+    btn.onclick = () => {
+      const i = Number(btn.getAttribute("data-rolis-copy-num"));
+      const row = (window.__rolisRowsCache || [])[i];
+      if (!row || !row.container) return;
+      copyTextRolis(row.container, "Номер контейнера скопирован");
+    };
+  });
+  document.querySelectorAll("[data-rolis-copy-visit]").forEach(btn => {
+    btn.onclick = () => {
+      const i = Number(btn.getAttribute("data-rolis-copy-visit"));
+      const row = (window.__rolisRowsCache || [])[i];
+      if (!row) return;
+      copyTextRolis(formatVisitClipboard(row), "Данные для визита скопированы");
+    };
+  });
+
+  const persist = (el) => {
+    const zid = Number(el.getAttribute("data-zid"));
+    const cont = el.getAttribute("data-cont") || "";
+    const row = el.closest("tr");
+    if (!row) return;
+    const statusEl = row.querySelector(".rolis-status-input");
+    const noteEl = row.querySelector(".rolis-note-input");
+    setRolisManual(zid, cont, statusEl ? statusEl.value : "", noteEl ? noteEl.value : "");
+    toast("Статус РОЛИС сохранён");
+  };
+  document.querySelectorAll(".rolis-status-input").forEach(el => {
+    el.addEventListener("change", () => persist(el));
+  });
+  document.querySelectorAll(".rolis-note-input").forEach(el => {
+    el.addEventListener("change", () => persist(el));
+  });
+
+  const refresh = document.getElementById("rolis-demo-refresh");
+  if (refresh) refresh.onclick = () => {
+    window.__rolisDemoOn = true;
+    // bump demo salt visually without saving — re-render with same deterministic values
+    // (hash is stable; toast confirms refresh)
+    showTab("rolis");
+    toast("Демо-статусы обновлены (примерные)");
+  };
+  const tog = document.getElementById("rolis-demo-toggle");
+  if (tog) tog.onclick = () => {
+    window.__rolisDemoOn = !window.__rolisDemoOn;
+    showTab("rolis");
+  };
+  const real = document.getElementById("rolis-real-connect");
+  if (real) {
+    real.onclick = (e) => {
+      e.preventDefault();
+      toast("Подключение настоящего РОЛИС настроит ассистент");
+    };
+  }
+}
+
+
 window.__appLogicReady = true;
 
 (function fillBlankTripMargins() {
@@ -3592,6 +4011,8 @@ async function pullStoreFromCloud(opts) {
     if (!DB.mail_feed) DB.mail_feed = [];
     if (!DB.mail_seen) DB.mail_seen = [];
     if (!DB.quotes_extra) DB.quotes_extra = [];
+    if (!DB.rolis) DB.rolis = { byKey: {} };
+    if (!DB.rolis.byKey) DB.rolis.byKey = {};
     try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch (e) {}
     try { applyVersionedImports(); } catch (e) {}
     if (opts.rerender !== false) {

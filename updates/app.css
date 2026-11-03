@@ -168,3 +168,25 @@ body.login-mode .app-shell{visibility:hidden}
 .chat-meta{font-size:.75rem;color:var(--muted);margin-bottom:4px}
 .chat-compose{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
 .chat-compose input{flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit}
+
+/* РОЛИС tab */
+.rolis-hero{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:8px}
+.rolis-open{display:inline-flex;align-items:center;justify-content:center;gap:10px;padding:16px 28px;font-size:1.15rem;font-weight:700;border-radius:12px;text-decoration:none!important;background:var(--accent);color:#fff!important;box-shadow:0 2px 8px rgba(15,61,46,.25)}
+.rolis-open:hover{background:var(--accent2)}
+.rolis-links{font-size:.92rem;line-height:1.55;color:var(--muted)}
+.rolis-links a{color:var(--accent)}
+.rolis-table-wrap{overflow-x:auto}
+.rolis-table td,.rolis-table th{vertical-align:top}
+.rolis-table .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88rem}
+.rolis-actions{display:flex;flex-direction:column;gap:6px;min-width:150px}
+.rolis-status-cell{min-width:180px}
+.rolis-status-cell input,.rolis-status-cell select,.rolis-status-cell textarea{width:100%;font:inherit;font-size:.88rem;padding:4px 6px;border:1px solid var(--line);border-radius:6px;margin-top:4px}
+.rolis-status-cell textarea{min-height:44px;resize:vertical}
+.rolis-guide ol{margin:0;padding-left:1.25rem;line-height:1.55}
+.rolis-guide li{margin-bottom:6px}
+.rolis-demo-banner{background:#fef3c7;border:1px solid #f59e0b;color:#78350f;border-radius:10px;padding:10px 14px;font-weight:700;margin-bottom:12px}
+.rolis-demo-tag{display:inline-block;background:#f59e0b;color:#fff;font-size:.72rem;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:4px;vertical-align:middle;letter-spacing:.02em}
+.rolis-demo-log{font-size:.85rem;line-height:1.45;margin:6px 0 0;padding:8px 10px;background:#fffbeb;border:1px dashed #f59e0b;border-radius:8px;color:#78350f}
+.rolis-demo-log li{margin:2px 0}
+.rolis-connect{margin-top:12px;padding:12px;border:1px dashed var(--line);border-radius:10px;background:#f8fafc;font-size:.92rem}
+.rolis-muted{color:var(--muted);font-size:.88rem}
