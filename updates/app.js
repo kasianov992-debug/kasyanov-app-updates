@@ -1091,10 +1091,10 @@ function fitLinear(pts) {
   return {a, b, n};
 }
 function fmtPair(a,b,est) {
-  const p = est ? "≈ " : "";
-  if (a && b) return p + Math.round(a/1000) + "/" + Math.round(b/1000);
-  if (a) return p + Math.round(a/1000) + " (только 20')";
-  if (b) return p + Math.round(b/1000) + " (только 40')";
+  /* est kept for callers; UI no longer prefixes ≈ */
+  if (a && b) return Math.round(a/1000) + "/" + Math.round(b/1000);
+  if (a) return Math.round(a/1000) + " (только 20')";
+  if (b) return Math.round(b/1000) + " (только 40')";
   return null;
 }
 function inferLaneOrigin(L) {
@@ -1118,9 +1118,9 @@ function inferLaneOrigin(L) {
 function defaultOverweight(weightT, roadKmVal) {
   const longHaul = roadKmVal != null && roadKmVal >= 1500;
   const heavy = weightT != null && weightT >= 27;
-  if (heavy || longHaul) return "≈ 5 000–8 000 ₽/т (ориентир для 27–28 т / дальних плеч)";
-  if (roadKmVal != null && roadKmVal < 200) return "≈ 1 000–1 500 ₽/т (ориентир, ближнее плечо)";
-  return "≈ 3 000–3 500 ₽/т (ориентир по зоне; точного нет в базе)";
+  if (heavy || longHaul) return "5 000–8 000 ₽/т (ориентир для 27–28 т / дальних плеч)";
+  if (roadKmVal != null && roadKmVal < 200) return "1 000–1 500 ₽/т (ориентир, ближнее плечо)";
+  return "3 000–3 500 ₽/т (ориентир по зоне; точного нет в базе)";
 }
 function buildDistanceModel() {
   const pts20 = {all:[], byOrigin:{}};
@@ -1208,7 +1208,7 @@ function estimateByDistance(nf, nt, weightT) {
     fit20: f20, fit40: f40,
     rub_km_20: rubKm20, rub_km_40: rubKm40,
     analogs: top,
-    method: "оценка по расстоянию (≈" + Math.round(rd.km) + " км), не точная"
+    method: "оценка по расстоянию (" + Math.round(rd.km) + " км), не точная"
   };
 }
 function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
@@ -1322,7 +1322,7 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
   if (similarEnough && (p20 || p40)) {
     pairText = fmtPair(p20, p40, isEstimate);
     warning = "" +
-      (isEstimate ? " Цифры помечены ≈ — точного совпадения маршрута в базе нет." : "");
+      (isEstimate ? " Точного совпадения маршрута в базе нет — ориентир по близким." : "");
     method = exact ? "точные совпадения в вашей базе" : "близкие маршруты из вашей базы";
     has_proposal = true;
   } else {
@@ -1336,8 +1336,8 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
       method = distInfo.method;
       confidence = "оценка по км";
       warning = "" +
-        "Это оценка по расстоянию (≈" + distInfo.km + " км), не точная ставка. " +
-        "Считается из ваших прошлых ставок: цена ≈ a + b·км" +
+        "Это оценка по расстоянию (" + distInfo.km + " км), не точная ставка. " +
+        "Считается из ваших прошлых ставок: цена = a + b·км" +
         (distInfo.fit40 ? (" (40': a=" + Math.round(distInfo.fit40.fit.a) + ", b=" + distInfo.fit40.fit.b.toFixed(1) + " ₽/км, n=" + distInfo.fit40.n + ", " + distInfo.fit40.scope + ")") : "") +
         ".";
       has_proposal = !!(p20 || p40);
@@ -1387,7 +1387,7 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
 }
 function renderStavki() {
   return `<h1>Калькулятор ставок</h1>
-  <div class="warn-box">Калькулятор показывает источники и помечает ориентиры знаком ≈.</div>
+  <div class="warn-box">Подбор ставки по вашей базе и оценке по расстоянию.</div>
   <div class="card">
     <div class="row">
       <div class="field"><label>Откуда</label><input id="s-from" placeholder="СПб"></div>
@@ -1428,7 +1428,7 @@ function showStavkiResult() {
   if (r.has_proposal) {
     html += `<div class="pair">${esc(r.pair_text)} <span style="font-size:1rem;font-weight:600">${esc(r.vat)}</span></div>
       <p>Перевес: <strong>${esc(r.overweight)}</strong> · Уверенность: <span class="chip ${r.is_estimate?"warn":""}">${esc(r.confidence)}</span>
-      ${r.distance_km?` · ≈${r.distance_km} км`:""}</p>`;
+      ${r.distance_km?` · ${r.distance_km} км`:""}</p>`;
     if (r.method) html += `<p class="muted">${esc(r.method)}</p>`;
   } else {
     html += `<div class="pair" style="color:var(--warn)">${esc(r.pair_text)}</div>`;
@@ -1438,20 +1438,7 @@ function showStavkiResult() {
   }
   for (const e of r.extras) html += `<div class="chip">${esc(e)}</div>`;
   for (const v of r.variants_note) html += `<p class="muted">${esc(v)}</p>`;
-  html += `<div class="warn-box">${esc(r.warning)}</div>`;
-  html += `<h3>Источники — ваши прошлые ставки клиенту</h3><div class="sources">`;
-  if (r.sources.length) {
-    for (const s of r.sources) {
-      html += `<div class="src"><strong>${esc(fmtDate(s.date))}</strong> · ${esc(s.source||"")} · ${esc(s.route)}
-        → <strong>${esc(s.pair||"")}</strong> ${esc(s.vat||"")}
-        ${s.overweight?`<span class="muted">· перевес ${esc(s.overweight)}</span>`:""}
-        ${s.note?`<div class="chip warn">${esc(s.note)}</div>`:""}
-        ${s.return_empty?`<div class="muted">сдача: ${esc(s.return_empty)}</div>`:""}
-        ${s.raw?`<div class="muted mono">${esc((s.raw||"").slice(0,180))}${(s.raw||"").length>180?"…":""}</div>`:""}
-      </div>`;
-    }
-  } else html += `<p class="muted">Близких клиентских ставок не найдено.</p>`;
-  html += `</div>`;
+  if (r.warning) html += `<div class="warn-box">${esc(r.warning)}</div>`;
   if (r.carrier_lanes.length) {
     html += `<h3 style="margin-top:16px">Рынок перевозчиков (MAX)</h3>`;
     if (r.market_median_note) html += `<p class="muted">Медиана рынка по найденным плечам: <strong>${money(r.market_median_note)}</strong> ₽ (без НДС у перевозчиков)</p>`;
@@ -3196,7 +3183,7 @@ function collectMapItems() {
   return items;
 }
 function popupHtml(item, path) {
-  const km = path && path.km ? (" · ≈" + Math.round(path.km) + " км") : "";
+  const km = path && path.km ? (" · " + Math.round(path.km) + " км") : "";
   const src = path && path.source === "osrm" ? " (по дорогам)" : " (оценка)";
   return `<strong>${esc(item.title)}</strong><br>
     ${esc(item.from)} → ${esc(item.to)}${km}${src}<br>
@@ -3440,7 +3427,7 @@ async function renderStavkiMapPanel(from, to) {
     meta.textContent = "Не знаю координаты: " + (straight.unknown || []).join(", ");
     return;
   }
-  meta.textContent = `${straight.fromKey} → ${straight.toKey} · ≈${Math.round(straight.km)} км · оценка (прямая × 1.2)`;
+  meta.textContent = `${straight.fromKey} → ${straight.toKey} · ${Math.round(straight.km)} км · оценка (прямая × 1.2)`;
   const map = createMap("stavki-map", { center: straight.fromCoords, zoom: 6 });
   if (!map) return;
   let line = L.polyline(straight.latlngs, { color: "#7c3aed", weight: 5, opacity: 0.9 }).addTo(map);
@@ -3455,7 +3442,7 @@ async function renderStavkiMapPanel(from, to) {
     const path = await resolveRoutePath(from, to, { osrm: true });
     if (path.ok && path.source === "osrm" && _mapInstances["stavki-map"] === map) {
       line.setLatLngs(path.latlngs);
-      meta.textContent = `${path.fromKey} → ${path.toKey} · ≈${Math.round(path.km)} км · по дорогам (OSRM)`;
+      meta.textContent = `${path.fromKey} → ${path.toKey} · ${Math.round(path.km)} км · по дорогам (OSRM)`;
       try { map.fitBounds(line.getBounds().pad(0.2), { animate: true, maxZoom: 9 }); } catch (e) {}
     }
   } catch (e) {}
@@ -3493,8 +3480,20 @@ function cacheBustUrl(url) {
 }
 function updateMailSourceList() {
   const list = [];
-  if (typeof updateUrlList === "function") {
-    try { return updateUrlList(); } catch (e) {}
+  try {
+    if (typeof getSupabaseUpdateRestUrl === "function") list.push(getSupabaseUpdateRestUrl());
+  } catch (e) {}
+  try {
+    if (typeof SUPABASE_UPDATE_REST === "string" && SUPABASE_UPDATE_REST) list.push(SUPABASE_UPDATE_REST);
+  } catch (e) {}
+  if (typeof updateUrlListAll === "function") {
+    try {
+      for (const u of updateUrlListAll()) if (u) list.push(u);
+    } catch (e) {}
+  } else if (typeof updateUrlList === "function") {
+    try {
+      for (const u of updateUrlList()) if (u) list.push(u);
+    } catch (e) {}
   }
   if (typeof UPDATE_URLS !== "undefined" && Array.isArray(UPDATE_URLS)) {
     for (const u of UPDATE_URLS) if (u) list.push(u);
@@ -3502,8 +3501,79 @@ function updateMailSourceList() {
   if (typeof UPDATE_URL === "string" && UPDATE_URL) list.push(UPDATE_URL);
   const seen = {};
   const out = [];
-  for (const u of list) { if (!seen[u]) { seen[u] = 1; out.push(u); } }
+  for (const u of list) { if (!u || seen[u]) continue; seen[u] = 1; out.push(u); }
   return out;
+}
+function isMailSupabaseUrl(url) {
+  if (typeof isSupabaseUpdateUrl === "function") return isSupabaseUpdateUrl(url);
+  return /\/rest\/v1\/app_updates/i.test(String(url || ""));
+}
+async function fetchMailBundleFromUrl(url) {
+  const resolve = (typeof resolveUrl === "function")
+    ? resolveUrl
+    : (base, rel) => {
+        if (!rel) return null;
+        if (/^https?:\/\//i.test(rel)) return rel;
+        try { return new URL(rel, base).toString(); } catch (e) { return rel; }
+      };
+  if (isMailSupabaseUrl(url)) {
+    const headers = (typeof supabaseUpdateHeaders === "function")
+      ? supabaseUpdateHeaders()
+      : (typeof SUPABASE_ANON_KEY === "string" ? {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: "Bearer " + SUPABASE_ANON_KEY,
+          Accept: "application/json"
+        } : { Accept: "application/json" });
+    const text = (typeof fetchUpdateText === "function")
+      ? await fetchUpdateText(url, headers)
+      : await (await fetch(url, { cache: "no-store", mode: "cors", headers: headers })).text();
+    const data = JSON.parse(text);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("пустой ответ Supabase");
+    const manifest = (typeof manifestFromSupabaseRow === "function")
+      ? manifestFromSupabaseRow(row)
+      : { version: row.version, data: {} };
+    let items = [];
+    let generated_at = null;
+    if (manifest.data && Array.isArray(manifest.data.mail_inline)) items = manifest.data.mail_inline;
+    else if (row.mail && Array.isArray(row.mail.items)) items = row.mail.items;
+    else if (Array.isArray(row.mail)) items = row.mail;
+    if (row.mail && row.mail.generated_at) generated_at = row.mail.generated_at;
+    else if (manifest.data && manifest.data.mail_generated_at) generated_at = manifest.data.mail_generated_at;
+    let quotes = null;
+    if (manifest.data && Array.isArray(manifest.data.quotes_inline)) quotes = manifest.data.quotes_inline;
+    else if (Array.isArray(row.quotes)) quotes = row.quotes;
+    return { host: "Supabase", items: items, generated_at: generated_at, quotes: quotes, version: String(manifest.version || row.version || "") };
+  }
+  const r = await fetch(cacheBustUrl(url), { cache: "no-store", mode: "cors" });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const manifest = await r.json();
+  const mailRel = (manifest.data && (manifest.data.mail_url || manifest.data.mail)) || "mail_public.json";
+  const mailUrl = resolve(url, mailRel);
+  if (!mailUrl) throw new Error("В манифесте нет mail_url");
+  const mr = await fetch(cacheBustUrl(mailUrl), { cache: "no-store", mode: "cors" });
+  if (!mr.ok) throw new Error("HTTP " + mr.status + " (mail)");
+  const mail = await mr.json();
+  const items = Array.isArray(mail) ? mail : (mail.items || []);
+  const generated_at = mail && mail.generated_at ? mail.generated_at : null;
+  let quotes = null;
+  const qRel = manifest.data && (manifest.data.quotes_url || manifest.data.quotes);
+  if (qRel && typeof mergeQuotesExtra === "function") {
+    try {
+      const qUrl = resolve(url, qRel);
+      const qr = await fetch(cacheBustUrl(qUrl), { cache: "no-store", mode: "cors" });
+      if (qr.ok) {
+        const qj = await qr.json();
+        quotes = Array.isArray(qj) ? qj : (qj.quotes || []);
+      }
+    } catch (e) {}
+  }
+  let host = "mirror";
+  try {
+    if (typeof updateHostLabel === "function") host = updateHostLabel(url);
+    else if (String(url).indexOf("jsdelivr") >= 0) host = "jsDelivr";
+  } catch (e) {}
+  return { host: host, items: items, generated_at: generated_at, quotes: quotes, version: String(manifest.version || "") };
 }
 async function refreshMailFeed(opts) {
   opts = opts || {};
@@ -3527,49 +3597,29 @@ async function refreshMailFeed(opts) {
     }
     const urls = updateMailSourceList();
     if (!urls.length) throw new Error("Источник обновлений не задан");
-    let manifest = null, usedUrl = null, lastErr = null;
+    let best = null, lastErr = null;
     for (const url of urls) {
       try {
-        const r = await fetch(cacheBustUrl(url), { cache: "no-store", mode: "cors" });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        manifest = await r.json();
-        usedUrl = url;
-        break;
+        const bundle = await fetchMailBundleFromUrl(url);
+        if (!bundle || !Array.isArray(bundle.items) || !bundle.items.length) {
+          throw new Error("пустая лента @ " + (bundle && bundle.host || "mirror"));
+        }
+        if (!best || (bundle.items.length > best.items.length)) best = bundle;
+        // Prefer first successful Supabase (fresh for RU); otherwise keep scanning for denser feed
+        if (bundle.host === "Supabase") { best = bundle; break; }
       } catch (e) { lastErr = e; }
     }
-    if (!manifest) throw lastErr || new Error("Не удалось скачать манифест");
-    const resolve = (typeof resolveUrl === "function")
-      ? resolveUrl
-      : (base, rel) => {
-          if (!rel) return null;
-          if (/^https?:\/\//i.test(rel)) return rel;
-          try { return new URL(rel, base).toString(); } catch (e) { return rel; }
-        };
-    const mailRel = (manifest.data && (manifest.data.mail_url || manifest.data.mail)) || "mail_public.json";
-    const mailUrl = resolve(usedUrl, mailRel);
-    if (!mailUrl) throw new Error("В манифесте нет mail_url");
-    const mr = await fetch(cacheBustUrl(mailUrl), { cache: "no-store", mode: "cors" });
-    if (!mr.ok) throw new Error("HTTP " + mr.status + " (mail)");
-    const mail = await mr.json();
-    const items = Array.isArray(mail) ? mail : (mail.items || []);
-    if (mail && mail.generated_at) window.__mailFeedGeneratedAt = mail.generated_at;
-    const added = typeof mergeMailFeed === "function" ? mergeMailFeed(items) : 0;
+    if (!best) throw lastErr || new Error("Не удалось скачать ленту запросов");
+    if (best.generated_at) window.__mailFeedGeneratedAt = best.generated_at;
+    const added = typeof mergeMailFeed === "function" ? mergeMailFeed(best.items) : 0;
     let quotesAdded = 0;
-    const qRel = manifest.data && (manifest.data.quotes_url || manifest.data.quotes);
-    if (qRel && typeof mergeQuotesExtra === "function") {
-      try {
-        const qUrl = resolve(usedUrl, qRel);
-        const qr = await fetch(cacheBustUrl(qUrl), { cache: "no-store", mode: "cors" });
-        if (qr.ok) {
-          const quotes = await qr.json();
-          quotesAdded = mergeQuotesExtra(Array.isArray(quotes) ? quotes : (quotes.quotes || []));
-        }
-      } catch (e) {}
+    if (best.quotes && typeof mergeQuotesExtra === "function") {
+      try { quotesAdded = mergeQuotesExtra(best.quotes); } catch (e) {}
     }
     window.__mailLastRefreshAt = new Date();
     window.__mailLastRefreshError = "";
     const hhmm = window.__mailLastRefreshAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
-    let msg = "Обновлено: " + hhmm + " МСК";
+    let msg = "Обновлено: " + hhmm + " МСК · " + (best.host || "mirror");
     if (window.__mailFeedGeneratedAt) {
       try {
         const g = new Date(window.__mailFeedGeneratedAt);
@@ -3595,7 +3645,7 @@ async function refreshMailFeed(opts) {
         try { showTab(currentTab); } catch (e) {}
       }
     }
-    return { added, quotesAdded, generated_at: window.__mailFeedGeneratedAt || null };
+    return { added, quotesAdded, generated_at: window.__mailFeedGeneratedAt || null, host: best.host };
   } catch (e) {
     const offline = (typeof navigator !== "undefined" && navigator.onLine === false);
     const msg = offline ? "Нет интернета — запросы не обновлены" : ("Не удалось обновить запросы" + (e && e.message ? (": " + e.message) : ""));
