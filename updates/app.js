@@ -3378,7 +3378,7 @@ function startMailAutoRefresh() {
 }
 /* startMailAutoRefresh: after login via bootCloudAuth */
 
-/* === Cloud: Supabase auth, shared store sync, chat (v1.0.7) === */
+/* === Cloud: Supabase auth, shared store sync, chat (v1.0.8) === */
 const SUPABASE_URL = "https://vourhkrahnbuugwfdgmt.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZvdXJoa3JhaG5idXVnd2ZkZ210Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2ODM2NjIsImV4cCI6MjEwOTI1OTY2Mn0._4KCTFhpI6SG1UljKQWaKHtBiPnnyXC83ZVEUKyqoZY";
 const CLOUD_STORE_KEY = "store";
@@ -3398,9 +3398,75 @@ window.__chatMessages = [];
 window.__chatSub = null;
 window.__storeSub = null;
 
+/* Old HTML shells only list GitHub raw; mutate the array so next update check tries jsDelivr first. */
+(function preferUpdateMirrors() {
+  try {
+    const jsd = "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@main/updates/manifest.json";
+    if (typeof UPDATE_URLS !== "undefined" && Array.isArray(UPDATE_URLS)) {
+      if (UPDATE_URLS.indexOf(jsd) < 0) UPDATE_URLS.unshift(jsd);
+    }
+  } catch (e) {}
+})();
+
+
 function getSupabaseLib() {
   return (window.supabase && window.supabase.createClient) ? window.supabase : null;
 }
+
+
+const SUPABASE_JS_URLS = [
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.min.js",
+  "https://unpkg.com/@supabase/supabase-js@2.49.1/dist/umd/supabase.min.js"
+];
+
+function loadScriptOnce(url, timeoutMs) {
+  timeoutMs = timeoutMs || 8000;
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-sb-cdn="' + url + '"]');
+    if (existing && getSupabaseLib()) { resolve(); return; }
+    const s = document.createElement("script");
+    s.src = url;
+    s.async = true;
+    s.dataset.sbCdn = url;
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      s.remove();
+      reject(new Error("timeout " + url));
+    }, timeoutMs);
+    s.onload = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    s.onerror = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      s.remove();
+      reject(new Error("load_failed " + url));
+    };
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureSupabaseJs() {
+  if (getSupabaseLib()) return true;
+  let lastErr = null;
+  for (const url of SUPABASE_JS_URLS) {
+    try {
+      await loadScriptOnce(url, 8000);
+      if (getSupabaseLib()) return true;
+      lastErr = new Error("loaded but no window.supabase: " + url);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("supabase-js unavailable");
+}
+
 
 function initSupabaseClient() {
   const lib = getSupabaseLib();
@@ -3817,6 +3883,12 @@ async function afterLoginSuccess() {
 
 async function doLogin(email, password) {
   setLoginError("");
+  try {
+    await ensureSupabaseJs();
+  } catch (e) {
+    setLoginError("Не удалось загрузить библиотеку входа (CDN). Проверьте интернет или откройте офлайн.");
+    return;
+  }
   const sb = initSupabaseClient();
   if (!sb) {
     setLoginError("Не удалось загрузить библиотеку входа. Проверьте интернет и обновите страницу.");
@@ -3866,6 +3938,12 @@ function bindLoginUi() {
 async function bootCloudAuth() {
   bindLoginUi();
   showLoginScreen(true);
+  try {
+    await ensureSupabaseJs();
+  } catch (e) {
+    setLoginError("Не удалось загрузить библиотеку входа (CDN). Проверьте интернет или откройте офлайн.");
+    return;
+  }
   const sb = initSupabaseClient();
   if (!sb) {
     setLoginError("Нет связи с сервером входа. Проверьте интернет или откройте офлайн.");
