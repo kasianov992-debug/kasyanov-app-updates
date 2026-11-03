@@ -3486,6 +3486,8 @@ function mailRefreshStatusText() {
 }
 function cacheBustUrl(url) {
   if (!url) return url;
+  // PostgREST rejects unknown query params (e.g. t=...) on /rest/v1/* 
+  if (/\/rest\/v1\//i.test(String(url))) return String(url);
   const sep = String(url).indexOf("?") >= 0 ? "&" : "?";
   return String(url) + sep + "t=" + Date.now();
 }
@@ -4428,7 +4430,7 @@ window.saveStore = saveStore;
 window.updateChatTabBadge = updateChatTabBadge;
 
 
-/* === Update sources 1.1.1: Supabase REST + jsDelivr + raw, parallel, highest version === */
+/* === Update sources 1.1.3: Supabase REST (no query bust) + jsDelivr + raw, parallel, highest version === */
 function isSupabaseUpdateUrl(url) {
   return /\/rest\/v1\/app_updates/i.test(String(url || ""));
 }
@@ -4443,7 +4445,11 @@ function updateHostLabel(url) {
 }
 async function fetchUpdateText(url, headers) {
   const host = updateHostLabel(url);
-  const bust = url + (String(url).indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+  // PostgREST treats unknown query params as column filters → HTTP 400.
+  // Never append cache-bust params to Supabase REST URLs; cache:"no-store" is enough.
+  const bust = isSupabaseUpdateUrl(url)
+    ? url
+    : (url + (String(url).indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now());
   const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
   const ms = (typeof UPDATE_FETCH_TIMEOUT_MS === "number" ? UPDATE_FETCH_TIMEOUT_MS : 8000);
   const timer = setTimeout(() => { try { if (ctrl) ctrl.abort(); } catch (e) {} }, ms);
@@ -4592,7 +4598,7 @@ async function checkForUpdatesAllSources(opts) {
     result.usedHost = best.host;
     setVer();
     if (result.codeUpdated) {
-      const msg = "Обновлено до " + result.remoteVer + " (" + best.host + ") — перезагрузка…";
+      const msg = "Обновлено до " + result.remoteVer + " (" + (best.host || best.source || "mirror") + ") — перезагрузка…";
       setStatus(msg, "ok");
       if (typeof toast === "function") toast(msg);
       setTimeout(() => location.reload(), 600);
@@ -4603,11 +4609,11 @@ async function checkForUpdatesAllSources(opts) {
       if (result.quotesAdded) bits.push("ставок +" + result.quotesAdded);
       if (result.mailAdded) bits.push("почта +" + result.mailAdded);
       const extra = bits.length ? (" · " + bits.join(" · ")) : "";
-      const msg = "У вас последняя версия " + result.cur + extra + " · " + best.host;
+      const msg = "У вас последняя версия " + result.cur + extra + " · " + (best.host || best.source || "mirror");
       setStatus(msg, "ok");
       if (opts.manual && typeof toast === "function") toast(msg);
     } else {
-      const msg = "Обновлено до " + result.remoteVer + " (данные · " + best.host + ")";
+      const msg = "Обновлено до " + result.remoteVer + " (данные · " + (best.host || best.source || "mirror") + ")";
       setStatus(msg, "ok");
       if (opts.manual && typeof toast === "function") toast(msg);
     }

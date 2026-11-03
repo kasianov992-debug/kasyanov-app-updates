@@ -1,7 +1,7 @@
 {
-  "version": "1.1.2",
-  "released_at": "2026-11-03T09:02:02Z",
-  "notes": "1.1.2: вёрстка вкладки РОЛИС; исправление двойного объявления SUPABASE_UPDATE_REST (пустой экран)",
+  "version": "1.1.3",
+  "released_at": "2026-11-03T09:14:31Z",
+  "notes": "1.1.3: исправление обновлений через Supabase (t= → HTTP 400); очистка устаревшего runtime-кэша; seed runtime из HTML",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -18,9 +18,9 @@
     ]
   },
   "code": {
-    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@7ff1f045fcd50f7b2ca23381e5e3e015af6d5d0f/updates/app.js",
-    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@7ff1f045fcd50f7b2ca23381e5e3e015af6d5d0f/updates/app.css",
-    "js_sha256": "d121c1edce7eb61b8be2cee793ae5ed55d97e6466cb3dd6000841bba04745820",
+    "js_url": "app.js",
+    "css_url": "app.css",
+    "js_sha256": "348784c788b688b363e74ee64aea55d33aed0d44ddd2c54249501c4314b9425a",
     "css_sha256": "1d29c282061ba2b4332197ebda6ee5a13cc224942cb797f1943c735627b93b13"
   },
   "data": {
