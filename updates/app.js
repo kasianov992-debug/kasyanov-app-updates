@@ -3817,15 +3817,23 @@ window.__chatMessages = [];
 window.__chatSub = null;
 window.__storeSub = null;
 
-/* Old HTML shells only list GitHub raw; mutate the array so next update check tries jsDelivr first. */
-(function preferUpdateMirrors() {
+/* Old HTML shells: inject Supabase (RU-reachable) + jsDelivr ahead of raw.githubusercontent. */
+const SUPABASE_UPDATE_REST =
+  "https://vourhkrahnbuugwfdgmt.supabase.co/rest/v1/app_updates?id=eq.current&select=*";
+function preferUpdateMirrors() {
   try {
+    const sb = SUPABASE_UPDATE_REST;
     const jsd = "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@main/updates/manifest.json";
     if (typeof UPDATE_URLS !== "undefined" && Array.isArray(UPDATE_URLS)) {
       if (UPDATE_URLS.indexOf(jsd) < 0) UPDATE_URLS.unshift(jsd);
+      if (UPDATE_URLS.indexOf(sb) < 0) UPDATE_URLS.unshift(sb);
+    }
+    if (typeof UPDATE_URL === "undefined" || !UPDATE_URL) {
+      try { window.UPDATE_URL = sb; } catch (e) {}
     }
   } catch (e) {}
-})();
+}
+preferUpdateMirrors();
 
 
 function getSupabaseLib() {
@@ -4403,3 +4411,235 @@ window.bindChatHandlers = bindChatHandlers;
 window.doLogout = doLogout;
 window.saveStore = saveStore;
 window.updateChatTabBadge = updateChatTabBadge;
+
+
+/* === Update sources 1.1.1: Supabase REST + jsDelivr + raw, parallel, highest version === */
+function isSupabaseUpdateUrl(url) {
+  return /\/rest\/v1\/app_updates/i.test(String(url || ""));
+}
+function updateHostLabel(url) {
+  try {
+    const u = new URL(url);
+    if (isSupabaseUpdateUrl(url)) return "Supabase";
+    if (u.hostname.indexOf("jsdelivr") >= 0) return "jsDelivr";
+    if (u.hostname.indexOf("githubusercontent") >= 0) return "GitHub raw";
+    return u.hostname;
+  } catch (e) { return String(url || "").slice(0, 40); }
+}
+async function fetchUpdateText(url, headers) {
+  const host = updateHostLabel(url);
+  const bust = url + (String(url).indexOf("?") >= 0 ? "&" : "?") + "t=" + Date.now();
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const ms = (typeof UPDATE_FETCH_TIMEOUT_MS === "number" ? UPDATE_FETCH_TIMEOUT_MS : 8000);
+  const timer = setTimeout(() => { try { if (ctrl) ctrl.abort(); } catch (e) {} }, ms);
+  try {
+    const r = await fetch(bust, {
+      cache: "no-store",
+      mode: "cors",
+      signal: ctrl ? ctrl.signal : undefined,
+      headers: headers || undefined
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status + " @ " + host);
+    return await r.text();
+  } catch (e) {
+    const name = (e && e.name) || "";
+    const msg = String((e && e.message) || e);
+    if (name === "AbortError" || msg.indexOf("timeout") >= 0) throw new Error("timeout @ " + host);
+    throw new Error(msg + (msg.indexOf(host) >= 0 ? "" : (" @ " + host)));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function supabaseUpdateHeaders() {
+  const key = (typeof SUPABASE_ANON_KEY === "string" && SUPABASE_ANON_KEY) ? SUPABASE_ANON_KEY : "";
+  return {
+    apikey: key,
+    Authorization: "Bearer " + key,
+    Accept: "application/json"
+  };
+}
+function manifestFromSupabaseRow(row) {
+  if (!row) throw new Error("empty supabase row");
+  const base = (row.manifest && typeof row.manifest === "object") ? JSON.parse(JSON.stringify(row.manifest)) : {};
+  base.version = String(row.version || base.version || "");
+  base.code = Object.assign({}, base.code || {});
+  // Inline columns win; strip URL fields so applyManifest does not re-fetch GitHub
+  if (row.js) {
+    base.code.js = row.js;
+    delete base.code.js_url;
+  }
+  if (row.css) {
+    base.code.css = row.css;
+    delete base.code.css_url;
+  }
+  const mail = row.mail;
+  const quotes = row.quotes;
+  base.data = Object.assign({}, base.data || {});
+  if (mail != null) {
+    if (Array.isArray(mail)) base.data.mail_inline = mail;
+    else if (mail && Array.isArray(mail.items)) base.data.mail_inline = mail.items;
+    if (mail && mail.generated_at) base.data.mail_generated_at = mail.generated_at;
+    delete base.data.mail_url;
+    delete base.data.mail;
+  }
+  if (quotes != null) {
+    if (Array.isArray(quotes)) base.data.quotes_inline = quotes;
+    else if (quotes && Array.isArray(quotes.quotes)) base.data.quotes_inline = quotes.quotes;
+    delete base.data.quotes_url;
+    delete base.data.quotes;
+  }
+  return base;
+}
+async function fetchUpdateCandidate(url) {
+  const host = updateHostLabel(url);
+  if (isSupabaseUpdateUrl(url)) {
+    const text = await fetchUpdateText(url, supabaseUpdateHeaders());
+    const data = JSON.parse(text);
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("no row @ " + host);
+    const manifest = manifestFromSupabaseRow(row);
+    if (row.mail && row.mail.generated_at) window.__mailFeedGeneratedAt = row.mail.generated_at;
+    return { url: url, host: host, version: String(manifest.version || ""), manifest: manifest, source: "supabase" };
+  }
+  const text = await fetchUpdateText(url);
+  const manifest = JSON.parse(text);
+  return { url: url, host: host, version: String(manifest.version || ""), manifest: manifest, source: "manifest" };
+}
+function updateUrlListAll() {
+  const list = [];
+  try {
+    if (typeof SUPABASE_UPDATE_REST === "string" && SUPABASE_UPDATE_REST) list.push(SUPABASE_UPDATE_REST);
+  } catch (e) {}
+  if (typeof UPDATE_URLS !== "undefined" && Array.isArray(UPDATE_URLS)) {
+    for (const u of UPDATE_URLS) if (u) list.push(u);
+  }
+  if (typeof UPDATE_URL === "string" && UPDATE_URL) list.push(UPDATE_URL);
+  const seen = {};
+  const out = [];
+  for (const u of list) {
+    if (!u || seen[u]) continue;
+    seen[u] = 1;
+    out.push(u);
+  }
+  return out;
+}
+async function checkForUpdatesAllSources(opts) {
+  opts = opts || {};
+  // Prefer shell helpers when present
+  const setStatus = (typeof setUpdateStatus === "function") ? setUpdateStatus : function () {};
+  const setVer = (typeof setVersionLabel === "function") ? setVersionLabel : function () {};
+  const cmp = (typeof cmpVer === "function") ? cmpVer : function (a, b) {
+    const aa = String(a || "0").split(/[^\d]+/).filter(Boolean).map(n => parseInt(n, 10) || 0);
+    const bb = String(b || "0").split(/[^\d]+/).filter(Boolean).map(n => parseInt(n, 10) || 0);
+    const n = Math.max(aa.length, bb.length);
+    for (let i = 0; i < n; i++) {
+      const x = aa[i] || 0, y = bb[i] || 0;
+      if (x > y) return 1;
+      if (x < y) return -1;
+    }
+    return 0;
+  };
+  const btn = document.getElementById("btn-update");
+  if (btn) btn.disabled = true;
+  setVer();
+  setStatus(opts.manual ? "Проверяю обновления…" : "Проверка обновлений…", "");
+  try {
+    const urls = updateUrlListAll();
+    if (!urls.length) {
+      setStatus("Источник обновлений не задан", "warn");
+      return;
+    }
+    const settled = await Promise.all(urls.map(u =>
+      fetchUpdateCandidate(u).then(
+        c => ({ ok: true, c: c }),
+        e => ({ ok: false, url: u, host: updateHostLabel(u), msg: String((e && e.message) || e) })
+      )
+    ));
+    const ok = settled.filter(x => x.ok).map(x => x.c);
+    const errors = settled.filter(x => !x.ok).map(x => ({ host: x.host, msg: x.msg }));
+    if (!ok.length) {
+      const offline = (typeof navigator !== "undefined" && navigator.onLine === false);
+      const detail = errors.map(e => e.host + ": " + e.msg).join("; ");
+      const msg = offline
+        ? "Нет интернета — работаю офлайн"
+        : ("Сервер обновлений недоступен — попробуйте позже. " + detail);
+      setStatus(msg, "warn");
+      if (opts.manual && typeof toast === "function") toast(msg);
+      return;
+    }
+    ok.sort((a, b) => cmp(b.version, a.version));
+    const best = ok[0];
+    if (typeof applyManifest !== "function") {
+      throw new Error("applyManifest недоступен");
+    }
+    // For Supabase, manifest already has inline js/css/mail/quotes — applyManifest uses them
+    const result = await applyManifest(best.manifest, best.url);
+    result.usedHost = best.host;
+    setVer();
+    if (result.codeUpdated) {
+      const msg = "Обновлено до " + result.remoteVer + " (" + best.host + ") — перезагрузка…";
+      setStatus(msg, "ok");
+      if (typeof toast === "function") toast(msg);
+      setTimeout(() => location.reload(), 600);
+      return;
+    }
+    if (cmp(result.remoteVer, result.cur) <= 0) {
+      const bits = [];
+      if (result.quotesAdded) bits.push("ставок +" + result.quotesAdded);
+      if (result.mailAdded) bits.push("почта +" + result.mailAdded);
+      const extra = bits.length ? (" · " + bits.join(" · ")) : "";
+      const msg = "У вас последняя версия " + result.cur + extra + " · " + best.host;
+      setStatus(msg, "ok");
+      if (opts.manual && typeof toast === "function") toast(msg);
+    } else {
+      const msg = "Обновлено до " + result.remoteVer + " (данные · " + best.host + ")";
+      setStatus(msg, "ok");
+      if (opts.manual && typeof toast === "function") toast(msg);
+    }
+    if (opts.manual) {
+      try { window.__mailLastRefreshAt = new Date(); } catch (e) {}
+    }
+    if (opts.manual || result.quotesAdded || result.mailAdded || (result.importSummary && result.importSummary.length)) {
+      try { if (typeof updateHomeTabBadge === "function") updateHomeTabBadge(); } catch (e) {}
+      try { if (typeof showTab === "function") showTab(currentTab || "pochta"); } catch (e) {}
+    }
+    try {
+      if (typeof UPDATE_CHECK_KEY === "string") localStorage.setItem(UPDATE_CHECK_KEY, new Date().toISOString());
+    } catch (e) {}
+  } catch (e) {
+    const offline = (typeof navigator !== "undefined" && navigator.onLine === false);
+    const detail = String((e && e.message) || e || "");
+    const msg = offline ? "Нет интернета — работаю офлайн" : ("Сервер обновлений недоступен — попробуйте позже. " + detail);
+    setStatus(msg, "warn");
+    if (opts.manual && typeof toast === "function") toast(msg);
+  } finally {
+    if (btn) btn.disabled = false;
+    setVer();
+  }
+}
+
+function installSupabaseAwareUpdater() {
+  try {
+    preferUpdateMirrors();
+  } catch (e) {}
+  try {
+    window.checkForUpdates = checkForUpdatesAllSources;
+    // Also assign bare binding for classic scripts that resolved the name early
+    try { checkForUpdates = checkForUpdatesAllSources; } catch (e) {}
+  } catch (e) {}
+  const btn = document.getElementById("btn-update");
+  if (btn) btn.onclick = () => checkForUpdatesAllSources({ manual: true });
+}
+
+(function scheduleUpdaterOverride() {
+  let n = 0;
+  const tick = () => {
+    n++;
+    installSupabaseAwareUpdater();
+    if (n < 30) setTimeout(tick, 200);
+  };
+  if (typeof document !== "undefined") {
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", tick);
+    else tick();
+  }
+})();
