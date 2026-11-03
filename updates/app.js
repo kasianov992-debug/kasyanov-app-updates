@@ -351,6 +351,112 @@ let editingTripId = null;
 let tripFormBaseline = null;
 let tripFormSaved = true;
 const MAIL_SEEN_KEY = "ip_kasyanov_mail_seen_v1";
+const MAIL_SOUND_KEY = "ip_kasyanov_mail_sound_v1";
+const MAIL_SOUND_KNOWN_KEY = "ip_kasyanov_mail_sound_known_v1";
+const DOC_TITLE_BASE = "ИП Касьянов — заявки, ставки, рейсы";
+const MAIL_AUTO_REFRESH_MS = 5 * 60 * 1000;
+
+function isMailSoundEnabled() {
+  try {
+    const v = localStorage.getItem(MAIL_SOUND_KEY);
+    if (v == null) return true;
+    return v !== "0" && v !== "false" && v !== "off";
+  } catch (e) { return true; }
+}
+function setMailSoundEnabled(on) {
+  try { localStorage.setItem(MAIL_SOUND_KEY, on ? "1" : "0"); } catch (e) {}
+}
+function loadMailSoundKnownIds() {
+  try {
+    const raw = localStorage.getItem(MAIL_SOUND_KNOWN_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    const set = {};
+    for (const id of Array.isArray(arr) ? arr : []) if (id) set[id] = 1;
+    return set;
+  } catch (e) { return {}; }
+}
+function saveMailSoundKnownIds(set) {
+  try { localStorage.setItem(MAIL_SOUND_KNOWN_KEY, JSON.stringify(Object.keys(set || {}))); } catch (e) {}
+}
+function seedMailSoundKnownFromFeed() {
+  const set = loadMailSoundKnownIds();
+  for (const it of (DB && DB.mail_feed) || []) if (it && it.id) set[it.id] = 1;
+  saveMailSoundKnownIds(set);
+}
+function setMailSoundHint(msg) {
+  window.__mailSoundHint = msg || "";
+  const el = document.getElementById("mail-sound-hint");
+  if (el) el.textContent = window.__mailSoundHint;
+}
+function playMailNotifySound(opts) {
+  opts = opts || {};
+  return new Promise((resolve, reject) => {
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) {
+        setMailSoundHint("Звук недоступен в этом браузере");
+        reject(new Error("no AudioContext"));
+        return;
+      }
+      if (!window.__mailAudioCtx) window.__mailAudioCtx = new AC();
+      const ctx = window.__mailAudioCtx;
+      const startTones = () => {
+        const now = ctx.currentTime;
+        const tones = [
+          { freq: 523.25, at: 0, dur: 0.22 },
+          { freq: 659.25, at: 0.12, dur: 0.28 },
+          { freq: 783.99, at: 0.26, dur: 0.32 }
+        ];
+        for (const t of tones) {
+          const o = ctx.createOscillator();
+          const g = ctx.createGain();
+          o.type = "sine";
+          o.frequency.value = t.freq;
+          const t0 = now + t.at;
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(0.11, t0 + 0.02);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + t.dur);
+          o.connect(g);
+          g.connect(ctx.destination);
+          o.start(t0);
+          o.stop(t0 + t.dur + 0.02);
+        }
+        window.__mailAudioBlocked = false;
+        if (!opts.keepHint) setMailSoundHint("");
+        setTimeout(resolve, 520);
+      };
+      const kick = () => {
+        if (ctx.state === "suspended") {
+          ctx.resume().then(startTones).catch((e) => {
+            window.__mailAudioBlocked = true;
+            setMailSoundHint("Нажмите один раз по странице или «Проверить звук», чтобы разрешить звук");
+            reject(e);
+          });
+        } else {
+          startTones();
+        }
+      };
+      kick();
+    } catch (e) {
+      window.__mailAudioBlocked = true;
+      setMailSoundHint("Нажмите один раз по странице или «Проверить звук», чтобы разрешить звук");
+      reject(e);
+    }
+  });
+}
+function notifyNewMailSound(newIds) {
+  const ids = (newIds || []).filter(Boolean);
+  const set = loadMailSoundKnownIds();
+  const fresh = [];
+  for (const id of ids) {
+    if (!set[id]) { fresh.push(id); set[id] = 1; }
+  }
+  for (const it of (DB && DB.mail_feed) || []) if (it && it.id) set[it.id] = 1;
+  saveMailSoundKnownIds(set);
+  if (!fresh.length) return;
+  if (!isMailSoundEnabled()) return;
+  playMailNotifySound().catch(() => {});
+}
 function snapshotZayavkaForm() {
   try { return JSON.stringify(readZayavkaForm()); } catch (e) { return null; }
 }
@@ -432,9 +538,11 @@ function countUnseenMail() {
 }
 function updateHomeTabBadge() {
   const btn = document.querySelector('#nav button[data-tab="home"]');
-  if (!btn) return;
   const n = countUnseenMail();
-  btn.textContent = n > 0 ? ("Главное (" + n + ")") : "Главное";
+  if (btn) btn.textContent = n > 0 ? ("Главное (" + n + ")") : "Главное";
+  try {
+    document.title = n > 0 ? ("(" + n + ") Почта") : DOC_TITLE_BASE;
+  } catch (e) {}
 }
 
 document.getElementById("nav").addEventListener("click", (e) => {
@@ -3107,18 +3215,26 @@ async function refreshMailFeed(opts) {
     if (added) msg += " · запросов +" + added;
     if (quotesAdded) msg += " · ставок +" + quotesAdded;
     setSt(msg);
+    const isAuto = !!opts.auto;
     if (typeof toast === "function") {
-      toast(added ? ("Новых запросов: " + added) : "Запросы обновлены");
+      if (!isAuto) toast(added ? ("Новых запросов: " + added) : "Запросы обновлены");
+      else if (added) toast("Новых запросов: " + added);
     }
     try { if (typeof updateHomeTabBadge === "function") updateHomeTabBadge(); } catch (e) {}
-    try { showTab(currentTab || "pochta"); } catch (e) {}
+    if (!isAuto) {
+      try { showTab(currentTab || "pochta"); } catch (e) {}
+    } else if (added || quotesAdded) {
+      if (currentTab === "pochta" || currentTab === "home") {
+        try { showTab(currentTab); } catch (e) {}
+      }
+    }
     return { added, quotesAdded, generated_at: window.__mailFeedGeneratedAt || null };
   } catch (e) {
     const offline = (typeof navigator !== "undefined" && navigator.onLine === false);
     const msg = offline ? "Нет интернета — запросы не обновлены" : ("Не удалось обновить запросы" + (e && e.message ? (": " + e.message) : ""));
     window.__mailLastRefreshError = msg;
     setSt(msg);
-    if (typeof toast === "function") toast(msg);
+    if (typeof toast === "function" && !opts.auto) toast(msg);
     return null;
   } finally {
     for (const btn of btns) btn.disabled = false;
@@ -3130,6 +3246,7 @@ function mergeMailFeed(items) {
   const byId = {};
   for (const it of DB.mail_feed) if (it && it.id) byId[it.id] = it;
   let added = 0, updated = 0;
+  const newIds = [];
   for (const raw of items) {
     if (!raw || !raw.id) continue;
     const row = {
@@ -3157,12 +3274,14 @@ function mergeMailFeed(items) {
       DB.mail_feed.push(row);
       byId[row.id] = row;
       added++;
+      newIds.push(row.id);
     }
   }
   if (added || updated) {
     DB.mail_feed.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
     saveStore(DB);
   }
+  try { notifyNewMailSound(newIds); } catch (e) {}
   return added;
 }
 function mailTypeOptions() {
@@ -3226,10 +3345,13 @@ function renderPochta() {
     <div class="toolbar">
       <button type="button" class="btn secondary" id="btn-mail-refresh" title="Подтянуть свежие запросы">⟳ Обновить</button>
       <button type="button" class="btn ghost" id="btn-mail-seen-all">Отметить все просмотренными</button>
+      <button type="button" class="btn ghost" id="btn-mail-sound-toggle" title="Звук при новых запросах">🔔 Звук: ${isMailSoundEnabled() ? "вкл" : "выкл"}</button>
+      <button type="button" class="btn ghost" id="btn-mail-sound-test" title="Проверить звук уведомления">Проверить звук</button>
       <span class="muted" id="mail-count">Показано: ${items.length}</span>
     </div>
     <div class="muted" id="mail-refresh-status">${esc(mailRefreshStatusText())}</div>
-    <p class="muted" style="margin:6px 0 0;font-size:0.9em">GitHub raw может отдавать кэш ~5 мин — при необходимости нажмите ещё раз чуть позже.</p>
+    <div class="muted" id="mail-sound-hint" style="margin-top:4px">${esc(window.__mailSoundHint || "")}</div>
+    <p class="muted" style="margin:6px 0 0;font-size:0.9em">Автообновление каждые 5 мин. GitHub raw может отдавать кэш ~5 мин — при необходимости нажмите ещё раз чуть позже.</p>
   </div>
   <div id="mail-list">${items.length ? items.map(it => renderMailCard(it, seen)).join("") : `<p class="muted">Ничего не найдено</p>`}</div>`;
 }
@@ -3289,5 +3411,30 @@ function bindPochtaHandlers() {
     updateHomeTabBadge();
     showTab("pochta");
   };
+  const snd = document.getElementById("btn-mail-sound-toggle");
+  if (snd) snd.onclick = () => {
+    setMailSoundEnabled(!isMailSoundEnabled());
+    showTab("pochta");
+  };
+  const test = document.getElementById("btn-mail-sound-test");
+  if (test) test.onclick = () => {
+    playMailNotifySound().then(() => {
+      if (typeof toast === "function") toast("Звук уведомления работает");
+    }).catch(() => {
+      if (typeof toast === "function") toast("Разрешите звук: нажмите по странице и повторите");
+    });
+  };
   bindMailSeenButtons(document.getElementById("mail-list"));
 }
+
+function startMailAutoRefresh() {
+  try { seedMailSoundKnownFromFeed(); } catch (e) {}
+  try { updateHomeTabBadge(); } catch (e) {}
+  if (window.__mailAutoRefreshTimer) return;
+  window.__mailAutoRefreshTimer = setInterval(() => {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return;
+    if (typeof refreshMailFeed === "function") refreshMailFeed({ auto: true });
+  }, MAIL_AUTO_REFRESH_MS);
+}
+try { startMailAutoRefresh(); } catch (e) {}
+
