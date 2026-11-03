@@ -517,10 +517,11 @@ function renderHome() {
   return `<h1>Главное</h1>
   <div class="card"><h2>Новые запросы ${unseen?`<span class="chip badge-new">${unseen}</span>`:""}</h2>
     <div class="toolbar">
-      <button type="button" class="btn secondary" id="btn-refresh-feed">Обновить ленту</button>
+      <button type="button" class="btn secondary" id="btn-refresh-feed" title="Подтянуть свежие запросы">⟳ Обновить</button>
       <button type="button" class="btn ghost" id="btn-mark-all-seen">Все просмотрены</button>
       <button type="button" class="btn ghost" onclick="showTab('pochta')">Вся почта</button>
     </div>
+    <div class="muted" id="home-refresh-status">${esc(mailRefreshStatusText())}</div>
     <div id="home-feed">${feedHtml}</div>
   </div>
   <div class="grid stats">
@@ -2987,6 +2988,142 @@ async function renderStavkiMapPanel(from, to) {
   } catch (e) {}
 }
 /* === Почта / лента запросов (mail_public.json) === */
+function mailRefreshStatusText() {
+  const parts = [];
+  try {
+    if (window.__mailLastRefreshAt) {
+      const d = window.__mailLastRefreshAt instanceof Date ? window.__mailLastRefreshAt : new Date(window.__mailLastRefreshAt);
+      const hhmm = d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
+      parts.push("Обновлено: " + hhmm + " МСК");
+    }
+  } catch (e) {}
+  try {
+    if (window.__mailFeedGeneratedAt) {
+      const g = new Date(window.__mailFeedGeneratedAt);
+      if (!isNaN(g.getTime())) {
+        const gtxt = g.toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+        parts.push("данные: " + gtxt + " МСК");
+      } else {
+        parts.push("данные: " + String(window.__mailFeedGeneratedAt));
+      }
+    }
+  } catch (e) {}
+  if (window.__mailLastRefreshError) parts.push(String(window.__mailLastRefreshError));
+  return parts.join(" · ");
+}
+function cacheBustUrl(url) {
+  if (!url) return url;
+  const sep = String(url).indexOf("?") >= 0 ? "&" : "?";
+  return String(url) + sep + "t=" + Date.now();
+}
+function updateMailSourceList() {
+  const list = [];
+  if (typeof updateUrlList === "function") {
+    try { return updateUrlList(); } catch (e) {}
+  }
+  if (typeof UPDATE_URLS !== "undefined" && Array.isArray(UPDATE_URLS)) {
+    for (const u of UPDATE_URLS) if (u) list.push(u);
+  }
+  if (typeof UPDATE_URL === "string" && UPDATE_URL) list.push(UPDATE_URL);
+  const seen = {};
+  const out = [];
+  for (const u of list) { if (!seen[u]) { seen[u] = 1; out.push(u); } }
+  return out;
+}
+async function refreshMailFeed(opts) {
+  opts = opts || {};
+  const setSt = (msg) => {
+    window.__mailLastRefreshError = (msg && /не удалось|нет интернета|ошибка/i.test(msg)) ? msg : "";
+    const text = msg || mailRefreshStatusText();
+    const a = document.getElementById("mail-refresh-status");
+    if (a) a.textContent = text;
+    const b = document.getElementById("home-refresh-status");
+    if (b) b.textContent = text;
+  };
+  const btns = [
+    document.getElementById("btn-mail-refresh"),
+    document.getElementById("btn-refresh-feed")
+  ].filter(Boolean);
+  for (const btn of btns) btn.disabled = true;
+  setSt("Обновляю запросы…");
+  try {
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      throw new Error("Нет интернета");
+    }
+    const urls = updateMailSourceList();
+    if (!urls.length) throw new Error("Источник обновлений не задан");
+    let manifest = null, usedUrl = null, lastErr = null;
+    for (const url of urls) {
+      try {
+        const r = await fetch(cacheBustUrl(url), { cache: "no-store", mode: "cors" });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        manifest = await r.json();
+        usedUrl = url;
+        break;
+      } catch (e) { lastErr = e; }
+    }
+    if (!manifest) throw lastErr || new Error("Не удалось скачать манифест");
+    const resolve = (typeof resolveUrl === "function")
+      ? resolveUrl
+      : (base, rel) => {
+          if (!rel) return null;
+          if (/^https?:\/\//i.test(rel)) return rel;
+          try { return new URL(rel, base).toString(); } catch (e) { return rel; }
+        };
+    const mailRel = (manifest.data && (manifest.data.mail_url || manifest.data.mail)) || "mail_public.json";
+    const mailUrl = resolve(usedUrl, mailRel);
+    if (!mailUrl) throw new Error("В манифесте нет mail_url");
+    const mr = await fetch(cacheBustUrl(mailUrl), { cache: "no-store", mode: "cors" });
+    if (!mr.ok) throw new Error("HTTP " + mr.status + " (mail)");
+    const mail = await mr.json();
+    const items = Array.isArray(mail) ? mail : (mail.items || []);
+    if (mail && mail.generated_at) window.__mailFeedGeneratedAt = mail.generated_at;
+    const added = typeof mergeMailFeed === "function" ? mergeMailFeed(items) : 0;
+    let quotesAdded = 0;
+    const qRel = manifest.data && (manifest.data.quotes_url || manifest.data.quotes);
+    if (qRel && typeof mergeQuotesExtra === "function") {
+      try {
+        const qUrl = resolve(usedUrl, qRel);
+        const qr = await fetch(cacheBustUrl(qUrl), { cache: "no-store", mode: "cors" });
+        if (qr.ok) {
+          const quotes = await qr.json();
+          quotesAdded = mergeQuotesExtra(Array.isArray(quotes) ? quotes : (quotes.quotes || []));
+        }
+      } catch (e) {}
+    }
+    window.__mailLastRefreshAt = new Date();
+    window.__mailLastRefreshError = "";
+    const hhmm = window.__mailLastRefreshAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
+    let msg = "Обновлено: " + hhmm + " МСК";
+    if (window.__mailFeedGeneratedAt) {
+      try {
+        const g = new Date(window.__mailFeedGeneratedAt);
+        const gtxt = g.toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+        msg += " · данные: " + gtxt + " МСК";
+      } catch (e) {
+        msg += " · данные: " + String(window.__mailFeedGeneratedAt);
+      }
+    }
+    if (added) msg += " · запросов +" + added;
+    if (quotesAdded) msg += " · ставок +" + quotesAdded;
+    setSt(msg);
+    if (typeof toast === "function") {
+      toast(added ? ("Новых запросов: " + added) : "Запросы обновлены");
+    }
+    try { if (typeof updateHomeTabBadge === "function") updateHomeTabBadge(); } catch (e) {}
+    try { showTab(currentTab || "pochta"); } catch (e) {}
+    return { added, quotesAdded, generated_at: window.__mailFeedGeneratedAt || null };
+  } catch (e) {
+    const offline = (typeof navigator !== "undefined" && navigator.onLine === false);
+    const msg = offline ? "Нет интернета — запросы не обновлены" : ("Не удалось обновить запросы" + (e && e.message ? (": " + e.message) : ""));
+    window.__mailLastRefreshError = msg;
+    setSt(msg);
+    if (typeof toast === "function") toast(msg);
+    return null;
+  } finally {
+    for (const btn of btns) btn.disabled = false;
+  }
+}
 function mergeMailFeed(items) {
   if (!Array.isArray(items) || !items.length) return 0;
   if (!DB.mail_feed) DB.mail_feed = [];
@@ -3087,10 +3224,12 @@ function renderPochta() {
         </select></div>
     </div>
     <div class="toolbar">
-      <button type="button" class="btn secondary" id="btn-mail-refresh">Обновить</button>
+      <button type="button" class="btn secondary" id="btn-mail-refresh" title="Подтянуть свежие запросы">⟳ Обновить</button>
       <button type="button" class="btn ghost" id="btn-mail-seen-all">Отметить все просмотренными</button>
       <span class="muted" id="mail-count">Показано: ${items.length}</span>
     </div>
+    <div class="muted" id="mail-refresh-status">${esc(mailRefreshStatusText())}</div>
+    <p class="muted" style="margin:6px 0 0;font-size:0.9em">GitHub raw может отдавать кэш ~5 мин — при необходимости нажмите ещё раз чуть позже.</p>
   </div>
   <div id="mail-list">${items.length ? items.map(it => renderMailCard(it, seen)).join("") : `<p class="muted">Ничего не найдено</p>`}</div>`;
 }
@@ -3107,7 +3246,8 @@ function bindMailSeenButtons(root) {
 function bindHomeFeedHandlers() {
   const r = document.getElementById("btn-refresh-feed");
   if (r) r.onclick = () => {
-    if (typeof checkForUpdates === "function") checkForUpdates({ manual: true });
+    if (typeof refreshMailFeed === "function") refreshMailFeed({ manual: true });
+    else if (typeof checkForUpdates === "function") checkForUpdates({ manual: true });
     else toast("Обновление недоступно офлайн");
   };
   const a = document.getElementById("btn-mark-all-seen");
@@ -3140,7 +3280,8 @@ function bindPochtaHandlers() {
   if (src) src.onchange = apply;
   const ref = document.getElementById("btn-mail-refresh");
   if (ref) ref.onclick = () => {
-    if (typeof checkForUpdates === "function") checkForUpdates({ manual: true });
+    if (typeof refreshMailFeed === "function") refreshMailFeed({ manual: true });
+    else if (typeof checkForUpdates === "function") checkForUpdates({ manual: true });
   };
   const all = document.getElementById("btn-mail-seen-all");
   if (all) all.onclick = () => {
