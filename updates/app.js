@@ -354,7 +354,7 @@ const MAIL_SEEN_KEY = "ip_kasyanov_mail_seen_v1";
 const MAIL_SOUND_KEY = "ip_kasyanov_mail_sound_v1";
 const MAIL_SOUND_KNOWN_KEY = "ip_kasyanov_mail_sound_known_v1";
 const DOC_TITLE_BASE = "Магистраль — система для экспедиторов";
-const MAIL_AUTO_REFRESH_MS = 5 * 60 * 1000;
+const MAIL_AUTO_REFRESH_MS = 2 * 60 * 1000;
 
 function isMailSoundEnabled() {
   try {
@@ -3469,6 +3469,7 @@ function mailRefreshStatusText() {
     }
   } catch (e) {}
   if (window.__mailLastRefreshError) parts.push(String(window.__mailLastRefreshError));
+  if (window.__mailLastSyncHint) parts.push(String(window.__mailLastSyncHint));
   return parts.join(" · ");
 }
 function cacheBustUrl(url) {
@@ -3575,6 +3576,63 @@ async function fetchMailBundleFromUrl(url) {
   } catch (e) {}
   return { host: host, items: items, generated_at: generated_at, quotes: quotes, version: String(manifest.version || "") };
 }
+
+async function fetchMailItemsFromSupabase() {
+  const sb = (typeof initSupabaseClient === "function") ? initSupabaseClient() : (window.__sb || null);
+  if (!sb) throw new Error("нет клиента Supabase");
+  if (!isLoggedIn()) throw new Error("нужен вход");
+  const { data, error } = await sb
+    .from("mail_items")
+    .select("id,received_at,from_name,from_email,subject,snippet,is_rate_request,route,container,weight,folder")
+    .order("received_at", { ascending: false })
+    .limit(200);
+  if (error) throw new Error(error.message || "mail_items");
+  const items = (data || []).map((row) => {
+    const received = row.received_at ? new Date(row.received_at) : null;
+    const dateStr = received && !isNaN(received.getTime())
+      ? received.toLocaleDateString("sv-SE", { timeZone: "Europe/Moscow" })
+      : "";
+    const timeStr = received && !isNaN(received.getTime())
+      ? received.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" })
+      : "";
+    const company = String(row.from_name || "").trim() || String(row.from_email || "").trim();
+    const isRate = !!row.is_rate_request;
+    return {
+      id: String(row.id),
+      date: dateStr,
+      time_msk: timeStr,
+      received_at: row.received_at || "",
+      type: isRate ? "запрос ставки" : "прочее",
+      source: "почта",
+      company: company,
+      subject: String(row.subject || ""),
+      route: String(row.route || ""),
+      container: String(row.container || ""),
+      weight: String(row.weight || ""),
+      rate: "",
+      summary: String(row.snippet || "").slice(0, 400),
+      is_rate_request: isRate,
+      from_email: String(row.from_email || "")
+    };
+  });
+  const generated_at = items.length && items[0].received_at ? items[0].received_at : new Date().toISOString();
+  return { host: "Mail.ru→Supabase", items: items, generated_at: generated_at, quotes: null, version: "" };
+}
+
+async function triggerMailruSync() {
+  const sb = (typeof initSupabaseClient === "function") ? initSupabaseClient() : (window.__sb || null);
+  if (!sb || !isLoggedIn()) return { skipped: true };
+  try {
+    const { data, error } = await sb.functions.invoke("mailru-sync", {
+      body: { source: "pochta_refresh" }
+    });
+    if (error) return { ok: false, error: error.message || String(error) };
+    return data || { ok: true };
+  } catch (e) {
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
 async function refreshMailFeed(opts) {
   opts = opts || {};
   const setSt = (msg) => {
@@ -3595,21 +3653,56 @@ async function refreshMailFeed(opts) {
     if (typeof navigator !== "undefined" && navigator.onLine === false) {
       throw new Error("Нет интернета");
     }
+    let best = null, lastErr = null, syncInfo = null;
+    // Manual refresh: ask Edge Function to pull Mail.ru (user JWT; function checks profiles)
+    if (opts.manual || !opts.auto) {
+      try {
+        syncInfo = await triggerMailruSync();
+      } catch (e) { /* non-fatal */ }
+    }
+    // Primary: authenticated mail_items from Supabase (direct Mail.ru sync)
+    try {
+      const live = await fetchMailItemsFromSupabase();
+      if (live && Array.isArray(live.items) && live.items.length) {
+        best = live;
+      } else if (live && Array.isArray(live.items)) {
+        // empty inbox still counts as success so we don't fall back to stale public feed only
+        best = live;
+      }
+    } catch (e) { lastErr = e; }
+    // Secondary: merge/keep existing public feed mirrors (app_updates / jsDelivr)
     const urls = updateMailSourceList();
-    if (!urls.length) throw new Error("Источник обновлений не задан");
-    let best = null, lastErr = null;
     for (const url of urls) {
       try {
         const bundle = await fetchMailBundleFromUrl(url);
         if (!bundle || !Array.isArray(bundle.items) || !bundle.items.length) {
           throw new Error("пустая лента @ " + (bundle && bundle.host || "mirror"));
         }
-        if (!best || (bundle.items.length > best.items.length)) best = bundle;
-        // Prefer first successful Supabase (fresh for RU); otherwise keep scanning for denser feed
-        if (bundle.host === "Supabase") { best = bundle; break; }
+        if (!best) best = bundle;
+        else if (bundle.host !== "Mail.ru→Supabase") {
+          // merge later via mergeMailFeed; keep denser legacy if live empty
+          if (!best.items.length) best = bundle;
+          else {
+            // stash legacy items onto best for merge
+            best = Object.assign({}, best, {
+              items: (best.items || []).concat(bundle.items || []),
+              quotes: best.quotes || bundle.quotes
+            });
+          }
+        }
+        if (bundle.host === "Supabase" && !(best && best.host === "Mail.ru→Supabase")) {
+          best = bundle;
+        }
       } catch (e) { lastErr = e; }
     }
     if (!best) throw lastErr || new Error("Не удалось скачать ленту запросов");
+    if (syncInfo && syncInfo.error && !opts.auto) {
+      window.__mailLastSyncHint = "синхронизация: " + String(syncInfo.error).slice(0, 120);
+    } else if (syncInfo && syncInfo.ok === false && syncInfo.detail) {
+      window.__mailLastSyncHint = "синхронизация: " + String(syncInfo.detail).slice(0, 120);
+    } else {
+      window.__mailLastSyncHint = "";
+    }
     if (best.generated_at) window.__mailFeedGeneratedAt = best.generated_at;
     const added = typeof mergeMailFeed === "function" ? mergeMailFeed(best.items) : 0;
     let quotesAdded = 0;
@@ -3669,7 +3762,9 @@ function mergeMailFeed(items) {
     const row = {
       id: String(raw.id),
       date: String(raw.date || "").slice(0, 10),
-      type: String(raw.type || "прочее"),
+      time_msk: String(raw.time_msk || ""),
+      received_at: String(raw.received_at || ""),
+      type: String(raw.type || (raw.is_rate_request ? "запрос ставки" : "прочее")),
       source: String(raw.source || ""),
       company: String(raw.company || ""),
       subject: String(raw.subject || ""),
@@ -3677,7 +3772,9 @@ function mergeMailFeed(items) {
       container: String(raw.container || ""),
       weight: String(raw.weight || ""),
       rate: String(raw.rate || ""),
-      summary: String(raw.summary || "")
+      summary: String(raw.summary || ""),
+      is_rate_request: !!(raw.is_rate_request || raw.type === "запрос ставки"),
+      from_email: String(raw.from_email || "")
     };
     // defensive: never keep forbidden keys
     if (byId[row.id]) {
@@ -3695,7 +3792,11 @@ function mergeMailFeed(items) {
     }
   }
   if (added || updated) {
-    DB.mail_feed.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+    DB.mail_feed.sort((a, b) => {
+      const ta = String(a.received_at || a.date || "");
+      const tb = String(b.received_at || b.date || "");
+      return tb.localeCompare(ta);
+    });
     saveStore(DB);
   }
   try { notifyNewMailSound(newIds); } catch (e) {}
@@ -3716,15 +3817,33 @@ function filterMailItems(q, typ, src) {
       return blob.indexOf(qq) >= 0;
     });
   }
-  items.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  items.sort((a, b) => {
+    const ta = String(a.received_at || a.date || "");
+    const tb = String(b.received_at || b.date || "");
+    return tb.localeCompare(ta);
+  });
   return items;
 }
 function renderMailCard(it, seen) {
   const isNew = it.id && !seen[it.id];
-  return `<div class="card mail-item${isNew ? " is-new" : ""}" data-mail-id="${esc(it.id || "")}">
+  const isRate = !!(it.is_rate_request || it.type === "запрос ставки");
+  let when = esc(fmtDate(it.date));
+  if (it.time_msk) when += " " + esc(it.time_msk) + " МСК";
+  else if (it.received_at) {
+    try {
+      const d = new Date(it.received_at);
+      if (!isNaN(d.getTime())) {
+        when = esc(d.toLocaleString("ru-RU", {
+          timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric",
+          hour: "2-digit", minute: "2-digit"
+        })) + " МСК";
+      }
+    } catch (e) {}
+  }
+  return `<div class="card mail-item${isNew ? " is-new" : ""}${isRate ? " is-rate" : ""}" data-mail-id="${esc(it.id || "")}"${isRate ? ' style="border-left:3px solid #c45c26"' : ""}>
     <div class="mail-head">
-      <strong>${esc(fmtDate(it.date))}</strong>
-      <span class="chip">${esc(it.type || "")}</span>
+      <strong>${when}</strong>
+      <span class="chip${isRate ? " badge-new" : ""}">${esc(it.type || "")}</span>
       <span class="chip muted">${esc(it.source || "")}</span>
       ${isNew ? `<span class="chip badge-new">новое</span>` : ""}
       ${it.company ? `<span>${esc(it.company)}</span>` : ""}
@@ -3746,7 +3865,7 @@ function renderPochta() {
     `<option value="${esc(t)}" ${t === typ ? "selected" : ""}>${t ? esc(t) : "Все типы"}</option>`
   ).join("");
   return `<h1>Почта</h1>
-  <div class="warn-box">Лента из публичного обновления: только компания, маршрут и ставка — без телефонов, ФИО и реквизитов.</div>
+  <div class="warn-box">Почта подтягивается напрямую из Mail.ru в ваш Supabase (для вошедших сотрудников). Публичная лента обновлений по-прежнему без телефонов, ФИО и реквизитов.</div>
   <div class="card">
     <div class="row">
       <div class="field wide"><label>Поиск</label>
@@ -3768,7 +3887,7 @@ function renderPochta() {
     </div>
     <div class="muted" id="mail-refresh-status">${esc(mailRefreshStatusText())}</div>
     <div class="muted" id="mail-sound-hint" style="margin-top:4px">${esc(window.__mailSoundHint || "")}</div>
-    <p class="muted" style="margin:6px 0 0;font-size:0.9em">Автообновление каждые 5 мин. GitHub raw может отдавать кэш ~5 мин — при необходимости нажмите ещё раз чуть позже.</p>
+    <p class="muted" style="margin:6px 0 0;font-size:0.9em">Автообновление каждые ~2 мин, пока вкладка открыта. «⟳ Обновить» также запускает синхронизацию с Mail.ru.</p>
   </div>
   <div id="mail-list">${items.length ? items.map(it => renderMailCard(it, seen)).join("") : `<p class="muted">Ничего не найдено</p>`}</div>`;
 }
