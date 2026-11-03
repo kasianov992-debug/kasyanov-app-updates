@@ -1,7 +1,7 @@
 {
-  "version": "1.0.8",
-  "released_at": "2026-11-03T06:39:54Z",
-  "notes": "1.0.8: зеркало jsDelivr для обновлений (РФ), таймаут 8с, динамическая загрузка supabase-js для старых оболочек, понятный статус «Обновить»",
+  "version": "1.0.9",
+  "released_at": "2026-11-03T08:11:12Z",
+  "notes": "1.0.9: программа «Магистраль» — название в шапке, на входе и во вкладке браузера; данные компании ИП Касьянов без изменений",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -20,8 +20,8 @@
   "code": {
     "js_url": "app.js",
     "css_url": "app.css",
-    "js_sha256": "b39f6856879ddef6a0cd23e8dffd5ae19f2f449a0fb142245563ca6b651d71aa",
-    "css_sha256": "858eb494c38471148bf6f83e0de0c78d138aac9e742f7c9aaf4f0a1cbe13b6ed"
+    "js_sha256": "42fb74dc31c3a417ccca135df68a060fceec2dbe125d677a6197011caa6c9623",
+    "css_sha256": "d0fa0b5fd7d124b747cf10e248783aa25c6586b503848d3e85c04994129cf3f4"
   },
   "data": {
     "quotes_url": "quotes_public.json",

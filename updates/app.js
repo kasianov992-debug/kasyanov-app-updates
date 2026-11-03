@@ -353,7 +353,7 @@ let tripFormSaved = true;
 const MAIL_SEEN_KEY = "ip_kasyanov_mail_seen_v1";
 const MAIL_SOUND_KEY = "ip_kasyanov_mail_sound_v1";
 const MAIL_SOUND_KNOWN_KEY = "ip_kasyanov_mail_sound_known_v1";
-const DOC_TITLE_BASE = "ИП Касьянов — заявки, ставки, рейсы";
+const DOC_TITLE_BASE = "Магистраль — система для экспедиторов";
 const MAIL_AUTO_REFRESH_MS = 5 * 60 * 1000;
 
 function isMailSoundEnabled() {
