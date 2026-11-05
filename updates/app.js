@@ -132,6 +132,7 @@ function mergeImportPack(pack) {
   if (!DB.quotes_extra) DB.quotes_extra = [];
   if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
   if (!DB.deleted_trips) DB.deleted_trips = [];
+  if (!DB.deleted_mail) DB.deleted_mail = [];
   if (!DB.mail_feed) DB.mail_feed = [];
   if (!DB.mail_seen) DB.mail_seen = [];
   const added = {carriers:0, drivers:0, trucks:0, trips:0, zayavki:0};
@@ -297,6 +298,7 @@ function applyVersionedImports() {
 let DB = loadStore();
 if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
 if (!DB.deleted_trips) DB.deleted_trips = [];
+if (!DB.deleted_mail) DB.deleted_mail = [];
 if (!DB.mail_feed) DB.mail_feed = [];
 if (!DB.mail_seen) DB.mail_seen = [];
 applyVersionedImports();
@@ -533,7 +535,7 @@ function countUnseenMail() {
   const set = loadMailSeenIds();
   const items = DB.mail_feed || [];
   let n = 0;
-  for (const it of items) if (it && it.id && !set[it.id]) n++;
+  for (const it of items) if (it && it.id && !isMailDeleted(it.id) && !set[it.id]) n++;
   return n;
 }
 function updateHomeTabBadge() {
@@ -1090,12 +1092,63 @@ function fitLinear(pts) {
   if (!(b > 0) || !(a > -500000)) return null; /* разумный уклон */
   return {a, b, n};
 }
+function fmtRub(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return null;
+  return String(Math.round(v)).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+}
 function fmtPair(a,b,est) {
-  /* est kept for callers; UI no longer prefixes ≈ */
-  if (a && b) return Math.round(a/1000) + "/" + Math.round(b/1000);
-  if (a) return Math.round(a/1000) + " (только 20')";
-  if (b) return Math.round(b/1000) + " (только 40')";
+  /* est kept for callers. Full rubles: «169 000 и 154 000 руб», not «169/154». */
+  const fa = fmtRub(a);
+  const fb = fmtRub(b);
+  if (fa && fb) return fa + " и " + fb + " руб";
+  if (fa) return fa + " руб (только 20')";
+  if (fb) return fb + " руб (только 40')";
   return null;
+}
+function fmtOneRate(n) {
+  const s = fmtRub(n);
+  return s ? (s + " руб") : null;
+}
+function normalizeContainerType(t) {
+  const s = String(t || "20").toLowerCase().replace(/ё/g, "е").trim();
+  if (s === "40" || s === "40'" || s === "40′" || s === "40ft") return "40";
+  if (s === "rf" || s === "reefer" || s === "реф" || s === "ref") return "rf";
+  return "20";
+}
+function containerTypeLabel(t) {
+  if (t === "40") return "40′";
+  if (t === "rf") return "реф";
+  return "20′";
+}
+function containerTypeTitle(t) {
+  if (t === "40") return "40-футовый контейнер";
+  if (t === "rf") return "реф-контейнер";
+  return "20-футовый контейнер";
+}
+function quoteSearchBlob(q) {
+  q = q || {};
+  return [q.container, q.cont_norm, q.cargo, q.conditions, q.quote_raw]
+    .map(x => String(x || "")).join(" ")
+    .toLowerCase()
+    .replace(/ё/g, "е");
+}
+function isReeferQuote(q) {
+  const blob = quoteSearchBlob(q);
+  if (/реф|reefer/.test(blob)) return true;
+  if (/40\s*rf|40rf|40\s*re\b|40re\b|40\s*rh|40rh|40\s*hr|40hr/.test(blob)) return true;
+  if (/(^|[^a-zа-я0-9])rf([^a-zа-я0-9]|$)/.test(blob)) return true;
+  return false;
+}
+function positivePrice(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+function selectedQuotePrice(q, ctype) {
+  if (!q) return null;
+  if (ctype === "40") return positivePrice(q.price_40);
+  if (ctype === "rf") return positivePrice(q.price_40) || positivePrice(q.price_20);
+  return positivePrice(q.price_20);
 }
 function inferLaneOrigin(L) {
   if (L.route_from) return normalizePlace(L.route_from);
@@ -1211,15 +1264,23 @@ function estimateByDistance(nf, nt, weightT) {
     method: "оценка по расстоянию (" + Math.round(rd.km) + " км), не точная"
   };
 }
-function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
+function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload, containerType) {
+  const ctype = normalizeContainerType(containerType);
   const nf = normalizePlace(routeFrom);
   const nt = normalizePlace(routeTo);
   const rd = roadKm(nf, nt);
   const scored = [];
   for (const q of allQuotes()) {
-    if (q.price_20 == null && q.price_40 == null) continue;
     const ep = quoteEndpoints(q);
-    if (ep.is_empty_only) continue; /* порожние рефы и т.п. — не для гружёного */
+    if (ctype === "rf") {
+      if (!isReeferQuote(q)) continue;
+      if (selectedQuotePrice(q, "rf") == null) continue;
+      /* порожний реф — отдельный тип ставки, его не отбрасываем */
+    } else {
+      if (isReeferQuote(q)) continue;
+      if (ep.is_empty_only) continue; /* порожние — не для гружёного сухого */
+      if (selectedQuotePrice(q, ctype) == null) continue;
+    }
     let sc = scoreMatch(nf, nt, ep.from, ep.to);
     if (sc.total < 50) {
       const sc2 = scoreMatch(nf, nt, (q.from_norm||""), (q.to_norm||""));
@@ -1253,15 +1314,35 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
   }
   laneHits.sort((a,b) => (b._score||0) - (a._score||0) || (b.n||0) - (a.n||0));
 
-  let pool = scored.filter(q => q._score >= 100 && !q._roundtrip);
-  if (!pool.length) pool = scored.filter(q => q._score >= 100);
-  if (!pool.length) pool = scored.filter(q => q._score >= 75 && !q._roundtrip);
-  if (!pool.length) pool = scored.filter(q => q._score >= 75);
-  if (!pool.length) pool = scored.filter(q => !q._roundtrip).slice(0, 8);
-  if (!pool.length) pool = scored.slice(0, 8);
+  let pool;
+  let reeferKind = "";
+  if (ctype === "rf") {
+    /* Слабые совпадения и оценка по км для рефа не используем — цифру не выдумываем. */
+    pool = scored.filter(q => q._score >= 100 && !q._roundtrip && !q._ep.is_empty_only);
+    if (pool.length) reeferKind = "loaded";
+    if (!pool.length) {
+      pool = scored.filter(q => q._score >= 75 && !q._roundtrip && !q._ep.is_empty_only);
+      if (pool.length) reeferKind = "loaded";
+    }
+    if (!pool.length) {
+      pool = scored.filter(q => q._score >= 100 && !q._roundtrip && q._ep.is_empty_only);
+      if (pool.length) reeferKind = "empty";
+    }
+    if (!pool.length) {
+      pool = scored.filter(q => q._score >= 75 && !q._roundtrip && q._ep.is_empty_only);
+      if (pool.length) reeferKind = "empty";
+    }
+  } else {
+    pool = scored.filter(q => q._score >= 100 && !q._roundtrip);
+    if (!pool.length) pool = scored.filter(q => q._score >= 100);
+    if (!pool.length) pool = scored.filter(q => q._score >= 75 && !q._roundtrip);
+    if (!pool.length) pool = scored.filter(q => q._score >= 75);
+    if (!pool.length) pool = scored.filter(q => !q._roundtrip).slice(0, 8);
+    if (!pool.length) pool = scored.slice(0, 8);
+  }
   /* близкие (регион) — в источники, но не в медиану пары, если уже есть точные */
   const exactPool = pool.filter(q => q._score >= 100 && !q._roundtrip);
-  const closeExtra = scored.filter(q => q._score >= 75 && q._score < 100 && !q._roundtrip);
+  const closeExtra = scored.filter(q => q._score >= 75 && q._score < 100 && !q._roundtrip && (ctype !== "rf" || isReeferQuote(q)));
 
   if (returnEmpty) {
     const re = normalizePlace(returnEmpty);
@@ -1276,18 +1357,32 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
     if (pref.length) pool = pref;
   }
 
-  const prices20 = pool.map(q => q.price_20).filter(Boolean);
-  const prices40 = pool.map(q => q.price_40).filter(Boolean);
+  const pricesSel = pool.map(q => selectedQuotePrice(q, ctype)).filter(Boolean);
+  const prices20 = pool.map(q => positivePrice(q.price_20)).filter(Boolean);
+  const prices40 = pool.map(q => positivePrice(q.price_40)).filter(Boolean);
   const overweights = pool.map(q => q.overweight).filter(Boolean);
-  const exact = scored.some(q => q._score >= 100 && !q._roundtrip);
-  const similarEnough = pool.length > 0 && (prices20.length + prices40.length) > 0;
+  const exact = pool.some(q => q._score >= 100 && !q._roundtrip);
+  const similarEnough = pool.length > 0 && pricesSel.length > 0;
 
-  let p20 = similarEnough ? median(prices20) : null;
-  let p40 = similarEnough ? median(prices40) : null;
-  if (p20 && p40 && p20 < p40) p20 = p40;
+  let p20 = null;
+  let p40 = null;
+  let primary = null;
+  if (similarEnough) {
+    if (ctype === "20") {
+      p20 = prices20.length ? median(prices20) : null;
+      p40 = prices40.length ? median(prices40) : null;
+      if (p20 && p40 && p20 < p40) p20 = p40;
+      primary = p20;
+    } else if (ctype === "40") {
+      p40 = prices40.length ? median(prices40) : null;
+      primary = p40;
+    } else {
+      primary = median(pricesSel);
+    }
+  }
 
   const isEstimate = !exact;
-  let confidence = exact ? "точная" : (scored.some(q=>q._score>=75 && !q._roundtrip) ? "близкая" : (similarEnough ? "частичная" : "нет данных"));
+  let confidence = exact ? "точная" : (pool.some(q=>q._score>=75 && !q._roundtrip) ? "близкая" : (similarEnough ? "частичная" : "нет данных"));
   let ow = overweights[0] || null;
   if (!ow) ow = defaultOverweight(weightT, rd && rd.km);
 
@@ -1296,52 +1391,73 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
   const variants = [];
   if (!returnEmpty) variants.push("Дайте два варианта: сдача порожнего в СПб и в Новороссийске — цена сильно отличается.");
 
-  const sources = pool.slice(0,8).map(q => ({
-    date: q.date, source: q.source,
-    route: (q.route_from||"") + " → " + (q.route_to||""),
-    pair: fmtPair(q.price_20, q.price_40, false),
-    vat: q.vat, overweight: q.overweight, raw: q.quote_raw,
-    return_empty: q.return_empty, score: q._score,
-    note: q._roundtrip ? "кругорейс (выгрузка не в конечном пункте сдачи)" : ""
-  }));
-  if (exactPool.length && closeExtra.length) {
+  function sourceRow(q, note) {
+    const one = fmtOneRate(selectedQuotePrice(q, ctype));
+    return {
+      date: q.date, source: q.source,
+      route: (q.route_from||"") + " → " + (q.route_to||""),
+      pair: one || fmtPair(q.price_20, q.price_40, false),
+      vat: q.vat, overweight: q.overweight, raw: q.quote_raw,
+      return_empty: q.return_empty, score: q._score,
+      note: note || ""
+    };
+  }
+  const sources = pool.slice(0,8).map(q => sourceRow(q,
+    (q._ep && q._ep.is_empty_only) ? "порожний реф" :
+    (q._roundtrip ? "кругорейс (выгрузка не в конечном пункте сдачи)" : "")
+  ));
+  if (exactPool.length && closeExtra.length && ctype !== "rf") {
     for (const q of closeExtra.slice(0, 4)) {
-      sources.push({
-        date: q.date, source: q.source,
-        route: (q.route_from||"") + " → " + (q.route_to||""),
-        pair: fmtPair(q.price_20, q.price_40, false),
-        vat: q.vat, overweight: q.overweight, raw: q.quote_raw,
-        return_empty: q.return_empty, score: q._score,
-        note: "близкий регион (не в расчёте пары)"
-      });
+      sources.push(sourceRow(q, "близкий регион (не в расчёте пары)"));
     }
   }
 
   let pairText, warning, method, distInfo = null, has_proposal = false;
+  const typeTitle = containerTypeTitle(ctype);
 
-  if (similarEnough && (p20 || p40)) {
-    pairText = fmtPair(p20, p40, isEstimate);
-    warning = "" +
-      (isEstimate ? " Точного совпадения маршрута в базе нет — ориентир по близким." : "");
-    method = exact ? "точные совпадения в вашей базе" : "близкие маршруты из вашей базы";
+  if (similarEnough && primary) {
+    pairText = fmtOneRate(primary);
+    if (ctype === "rf" && reeferKind === "empty") {
+      warning = "Это ставка на вывоз порожнего реф-контейнера, не на гружёный рейс.";
+      method = exact ? "порожний реф: точное совпадение в вашей базе" : "порожний реф: близкие маршруты из вашей базы";
+    } else if (ctype === "rf") {
+      warning = isEstimate ? " Точного совпадения маршрута по рефу нет — ориентир по близким реф-ставкам." : "";
+      method = exact ? "точные совпадения по реф-контейнеру" : "близкие маршруты по реф-контейнеру";
+    } else {
+      warning = isEstimate ? " Точного совпадения маршрута в базе нет — ориентир по близким." : "";
+      method = exact ? "точные совпадения в вашей базе" : "близкие маршруты из вашей базы";
+    }
     has_proposal = true;
+  } else if (ctype === "rf") {
+    /* Реф не оцениваем по сухим ставкам и не по километражу. */
+    pairText = "нет ставки на реф-контейнер";
+    method = "нет данных по рефу";
+    confidence = "нет данных";
+    const cityProbe = estimateByDistance(nf, nt, weightT);
+    distInfo = (cityProbe && !cityProbe.ok) ? cityProbe : null;
+    const unknown = distInfo && distInfo.unknown && distInfo.unknown.length;
+    warning = unknown
+      ? ("По этому направлению в базе нет ставки на реф-контейнер — цифру не предлагаю. " + (distInfo.message || ""))
+      : "По этому направлению в базе нет надёжной ставки на реф-контейнер (реф, RF, 40RF, порожний реф). Оценку по километражу для рефа не подставляю — цифру не предлагаю.";
+    has_proposal = false;
   } else {
-    /* Оценка по расстоянию */
+    /* Оценка по расстоянию — только для выбранного сухого типа, из уже посчитанных price_20 / price_40. */
     distInfo = estimateByDistance(nf, nt, weightT);
-    if (distInfo.ok) {
-      p20 = distInfo.price_20;
-      p40 = distInfo.price_40;
-      if (p20 && p40 && p20 < p40) p20 = p40;
-      pairText = fmtPair(p20, p40, true);
+    const picked = distInfo.ok ? (ctype === "40" ? distInfo.price_40 : distInfo.price_20) : null;
+    if (distInfo.ok && picked) {
+      primary = picked;
+      if (ctype === "40") p40 = picked;
+      else p20 = picked;
+      pairText = fmtOneRate(primary);
       method = distInfo.method;
       confidence = "оценка по км";
-      warning = "" +
-        "Это оценка по расстоянию (" + distInfo.km + " км), не точная ставка. " +
+      const fit = ctype === "40" ? distInfo.fit40 : distInfo.fit20;
+      const fitName = ctype === "40" ? "40'" : "20'";
+      warning = "Это оценка по расстоянию (" + distInfo.km + " км) для " + typeTitle + ", не точная ставка. " +
         "Считается из ваших прошлых ставок: цена = a + b·км" +
-        (distInfo.fit40 ? (" (40': a=" + Math.round(distInfo.fit40.fit.a) + ", b=" + distInfo.fit40.fit.b.toFixed(1) + " ₽/км, n=" + distInfo.fit40.n + ", " + distInfo.fit40.scope + ")") : "") +
+        (fit ? (" (" + fitName + ": a=" + Math.round(fit.fit.a) + ", b=" + fit.fit.b.toFixed(1) + " ₽/км, n=" + fit.n + ", " + fit.scope + ")") : "") +
         ".";
-      has_proposal = !!(p20 || p40);
-      /* аналоги по расстоянию как источники */
+      has_proposal = true;
       for (const a of distInfo.analogs) {
         sources.push({
           date: a.q.date, source: a.q.source,
@@ -1352,15 +1468,23 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
         });
       }
     } else {
-      pairText = "в базе нет похожих маршрутов";
+      pairText = "нет ставки на " + typeTitle;
       method = "нет данных";
-      warning = "" +
-        (distInfo.message || "По этому направлению похожих ваших ставок нет — цифру не предлагаю.");
+      confidence = "нет данных";
+      warning = (distInfo && !distInfo.ok && distInfo.message)
+        ? distInfo.message
+        : ("По этому направлению нет цены на " + typeTitle + " — цифру не предлагаю.");
       has_proposal = false;
     }
   }
 
-  const carrier_lanes = laneHits.slice(0,5).map(L => ({
+  const laneUse = laneHits.filter(L => {
+    const reef = isReeferQuote({
+      container: L.container, cont_norm: "", cargo: "", conditions: "", quote_raw: L.sample_raw || ""
+    });
+    return ctype === "rf" ? reef : !reef;
+  });
+  const carrier_lanes = laneUse.slice(0,5).map(L => ({
     route: (L._from || L.route_from || "?") + " → " + (L.route_to||""),
     container: L.container, weight_band: L.weight_band, n: L.n,
     min: L.min_price, median: L.median_price, max: L.max_price,
@@ -1375,23 +1499,37 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload) {
   }
 
   return {
-    pair_text: pairText, price_20: p20, price_40: p40, vat: "+5% НДС",
+    pair_text: pairText, price: primary,
+    price_20: ctype === "20" ? primary : null,
+    price_40: (ctype === "40" || ctype === "rf") ? primary : null,
+    container_type: ctype,
+    container_label: containerTypeLabel(ctype),
+    container_title: typeTitle,
+    vat: "+5% НДС",
     overweight: ow || "—", confidence, is_estimate: isEstimate || !exact,
     extras, variants_note: variants, sources,
     carrier_lanes, market_median_note,
     warning, has_proposal, method,
-    distance_km: rd ? Math.round(rd.km) : (distInfo && distInfo.km) || null,
+    distance_km: rd ? Math.round(rd.km) : (distInfo && distInfo.ok ? distInfo.km : null) || null,
     dist_info: distInfo && distInfo.ok ? distInfo : null,
     unknown_city: distInfo && !distInfo.ok ? distInfo.unknown : null
   };
 }
 function renderStavki() {
   return `<h1>Калькулятор ставок</h1>
-  <div class="warn-box">Подбор ставки по вашей базе и оценке по расстоянию.</div>
+  <div class="warn-box">Подбор ставки по вашей базе и оценке по расстоянию. Сумма — в рублях, для выбранного типа контейнера.</div>
   <div class="card">
     <div class="row">
       <div class="field"><label>Откуда</label><input id="s-from" placeholder="СПб"></div>
       <div class="field"><label>Куда</label><input id="s-to" placeholder="Казань"></div>
+      <div class="field" style="min-width:240px;flex:1.3">
+        <label>Контейнер</label>
+        <div class="toolbar" id="s-cont" role="radiogroup" aria-label="Контейнер" style="margin:0">
+          <button type="button" class="btn small" data-cont="20" aria-pressed="true" title="20-футовый контейнер">20′</button>
+          <button type="button" class="btn small ghost" data-cont="40" aria-pressed="false" title="40-футовый контейнер">40′</button>
+          <button type="button" class="btn small ghost" data-cont="rf" aria-pressed="false" title="Реф-контейнер (RF)">Реф</button>
+        </div>
+      </div>
       <div class="field" style="max-width:110px"><label>Вес, т</label><input id="s-w" placeholder="20"></div>
       <div class="field"><label>Сдача порожнего</label><input id="s-ret" placeholder="СПб / Новороссийск"></div>
       <div class="field check"><input type="checkbox" id="s-2u"><label for="s-2u">2-я выгрузка</label></div>
@@ -1404,8 +1542,16 @@ function renderStavki() {
       <div class="field" style="max-width:150px"><label>Дата</label><input type="date" id="aq-date"></div>
       <div class="field"><label>Откуда</label><input id="aq-from"></div>
       <div class="field"><label>Куда</label><input id="aq-to"></div>
-      <div class="field" style="max-width:100px"><label>20'</label><input id="aq-20" placeholder="265000"></div>
-      <div class="field" style="max-width:100px"><label>40'</label><input id="aq-40" placeholder="250000"></div>
+      <div class="field"><label>Контейнер</label>
+        <select id="aq-cont">
+          <option value="20/40">20′ / 40′</option>
+          <option value="20">20-футовый (20′)</option>
+          <option value="40">40-футовый (40′)</option>
+          <option value="rf">Реф-контейнер (RF)</option>
+        </select>
+      </div>
+      <div class="field" style="max-width:120px"><label>20', руб</label><input id="aq-20" placeholder="265000"></div>
+      <div class="field" style="max-width:120px"><label>40' / реф, руб</label><input id="aq-40" placeholder="250000"></div>
       <div class="field" style="max-width:100px"><label>НДС</label><input id="aq-vat" value="+5%"></div>
     </div>
     <div class="row">
@@ -1416,6 +1562,25 @@ function renderStavki() {
     <button class="btn secondary" id="btn-add-quote">Добавить</button>
   </div>`;
 }
+function selectedContainerType() {
+  const g = document.getElementById("s-cont");
+  if (!g) return "20";
+  const on = g.querySelector('[aria-pressed="true"]');
+  return normalizeContainerType(on && on.getAttribute("data-cont"));
+}
+function bindContainerTypeButtons() {
+  const g = document.getElementById("s-cont");
+  if (!g) return;
+  g.querySelectorAll("[data-cont]").forEach(btn => {
+    btn.onclick = () => {
+      g.querySelectorAll("[data-cont]").forEach(b => {
+        const on = b === btn;
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        b.className = "btn small" + (on ? "" : " ghost");
+      });
+    };
+  });
+}
 function showStavkiResult() {
   const from = document.getElementById("s-from").value.trim();
   const to = document.getElementById("s-to").value.trim();
@@ -1423,10 +1588,11 @@ function showStavkiResult() {
   const w = parseFloat(document.getElementById("s-w").value) || null;
   const ret = document.getElementById("s-ret").value.trim();
   const su = document.getElementById("s-2u").checked;
-  const r = suggestRate(from, to, w, ret, su);
-  let html = `<div class="card"><h2>Предложение</h2>`;
+  const ctype = selectedContainerType();
+  const r = suggestRate(from, to, w, ret, su, ctype);
+  let html = `<div class="card"><h2>Предложение · ${esc(r.container_title || containerTypeTitle(ctype))}</h2>`;
   if (r.has_proposal) {
-    html += `<div class="pair">${esc(r.pair_text)} <span style="font-size:1rem;font-weight:600">${esc(r.vat)}</span></div>
+    html += `<div class="pair">${esc(r.pair_text)} <span class="chip">${esc(r.container_label || "")}</span> <span style="font-size:1rem;font-weight:600">${esc(r.vat)}</span></div>
       <p>Перевес: <strong>${esc(r.overweight)}</strong> · Уверенность: <span class="chip ${r.is_estimate?"warn":""}">${esc(r.confidence)}</span>
       ${r.distance_km?` · ${r.distance_km} км`:""}</p>`;
     if (r.method) html += `<p class="muted">${esc(r.method)}</p>`;
@@ -1458,13 +1624,18 @@ function addQuote() {
   const from = document.getElementById("aq-from").value.trim();
   const to = document.getElementById("aq-to").value.trim();
   if (!from || !to) { alert("Укажите маршрут"); return; }
+  const contSel = (document.getElementById("aq-cont") || {}).value || "20/40";
+  let container = "20/40", cont_norm = "20/40";
+  if (contSel === "20") { container = "20'"; cont_norm = "20"; }
+  else if (contSel === "40") { container = "40'"; cont_norm = "40"; }
+  else if (contSel === "rf") { container = "реф"; cont_norm = "реф"; }
   const q = {
     date: document.getElementById("aq-date").value || new Date().toISOString().slice(0,10),
     source: "вручную", who: "owner",
     client: document.getElementById("aq-client").value.trim(), contact: "",
     route_from: from, route_to: to,
     from_norm: normalizePlace(from), to_norm: normalizePlace(to),
-    return_empty: "", container: "20/40", cont_norm: "20/40", cargo: "",
+    return_empty: "", container: container, cont_norm: cont_norm, cargo: "",
     weight_t: null, conditions: "",
     quote_raw: document.getElementById("aq-raw").value.trim(),
     price_20: parseInt(document.getElementById("aq-20").value,10) || null,
@@ -2374,6 +2545,7 @@ function bindTabHandlers(tab) {
     bindKartaHandlers();
   }
   if (tab === "stavki") {
+    bindContainerTypeButtons();
     document.getElementById("btn-stavki").onclick = showStavkiResult;
     document.getElementById("btn-add-quote").onclick = addQuote;
     ["s-from","s-to","s-w","s-ret"].forEach(id => {
@@ -3750,15 +3922,50 @@ async function refreshMailFeed(opts) {
     for (const btn of btns) btn.disabled = false;
   }
 }
+function ensureDeletedMail() {
+  if (!DB.deleted_mail) DB.deleted_mail = [];
+}
+function isMailDeleted(id) {
+  if (!id || !DB || !DB.deleted_mail || !DB.deleted_mail.length) return false;
+  const s = String(id);
+  return DB.deleted_mail.some(t => String((t && t.id) || t) === s);
+}
+function markMailDeleted(id) {
+  if (!id) return;
+  ensureDeletedMail();
+  const s = String(id);
+  if (!isMailDeleted(s)) DB.deleted_mail.push({ id: s, deleted_at: new Date().toISOString() });
+  if (DB.mail_feed) DB.mail_feed = DB.mail_feed.filter(it => !it || String(it.id) !== s);
+  saveStore(DB);
+}
+/* mail_items в Supabase доступен сотрудникам только на чтение (SELECT).
+   Удаление — метка в общем хранилище app_data, чтобы обновление ленты не вернуло письмо. */
+function deleteMailItem(id) {
+  if (!id) return;
+  const it = (DB.mail_feed || []).find(x => x && String(x.id) === String(id));
+  const subj = it && it.subject ? String(it.subject) : "это письмо";
+  if (!confirm("Удалить из списка?\n\n" + subj + "\n\nПисьмо скроется здесь и не вернётся при обновлении почты.")) return;
+  markMailDeleted(id);
+  try { markMailSeen(id); } catch (e) {}
+  try { updateHomeTabBadge(); } catch (e) {}
+  toast("Письмо убрано из списка");
+  if (currentTab === "pochta") showTab("pochta");
+}
 function mergeMailFeed(items) {
   if (!Array.isArray(items) || !items.length) return 0;
   if (!DB.mail_feed) DB.mail_feed = [];
+  ensureDeletedMail();
+  const beforeN = DB.mail_feed.length;
+  const kept = DB.mail_feed.filter(it => it && !isMailDeleted(it.id));
+  const stripped = kept.length !== beforeN;
+  if (stripped) DB.mail_feed = kept;
   const byId = {};
   for (const it of DB.mail_feed) if (it && it.id) byId[it.id] = it;
   let added = 0, updated = 0;
   const newIds = [];
   for (const raw of items) {
     if (!raw || !raw.id) continue;
+    if (isMailDeleted(raw.id)) continue;
     const row = {
       id: String(raw.id),
       date: String(raw.date || "").slice(0, 10),
@@ -3791,7 +3998,7 @@ function mergeMailFeed(items) {
       newIds.push(row.id);
     }
   }
-  if (added || updated) {
+  if (added || updated || stripped) {
     DB.mail_feed.sort((a, b) => {
       const ta = String(a.received_at || a.date || "");
       const tb = String(b.received_at || b.date || "");
@@ -3807,7 +4014,7 @@ function mailTypeOptions() {
 }
 function filterMailItems(q, typ, src) {
   const qq = String(q || "").toLowerCase().trim();
-  let items = (DB.mail_feed || []).slice();
+  let items = (DB.mail_feed || []).filter(it => it && !isMailDeleted(it.id));
   if (typ) items = items.filter(it => it.type === typ);
   if (src) items = items.filter(it => it.source === src);
   if (qq) {
@@ -3847,6 +4054,7 @@ function renderMailCard(it, seen) {
       <span class="chip muted">${esc(it.source || "")}</span>
       ${isNew ? `<span class="chip badge-new">новое</span>` : ""}
       ${it.company ? `<span>${esc(it.company)}</span>` : ""}
+      <button type="button" class="btn small ghost" data-mail-del="${esc(it.id || "")}" style="margin-left:auto;color:#b91c1c!important">Удалить</button>
     </div>
     <div class="mail-subj">${esc(it.subject || "без темы")}</div>
     <div class="muted">${esc(it.route || "")}${it.container ? " · " + esc(it.container) : ""}${it.weight ? " · " + esc(it.weight) : ""}</div>
@@ -3960,6 +4168,12 @@ function bindPochtaHandlers() {
     });
   };
   bindMailSeenButtons(document.getElementById("mail-list"));
+  bindMailDeleteButtons(document.getElementById("mail-list"));
+}
+function bindMailDeleteButtons(root) {
+  (root || document).querySelectorAll("[data-mail-del]").forEach(b => {
+    b.onclick = () => deleteMailItem(b.getAttribute("data-mail-del"));
+  });
 }
 
 function startMailAutoRefresh() {
@@ -4202,6 +4416,7 @@ async function pullStoreFromCloud(opts) {
     DB = cloud;
     if (!DB.deleted_zayavki) DB.deleted_zayavki = [];
     if (!DB.deleted_trips) DB.deleted_trips = [];
+    if (!DB.deleted_mail) DB.deleted_mail = [];
     if (!DB.mail_feed) DB.mail_feed = [];
     if (!DB.mail_seen) DB.mail_seen = [];
     if (!DB.quotes_extra) DB.quotes_extra = [];
@@ -4233,6 +4448,7 @@ function subscribeStoreRealtime() {
       if (!row || !row.value || !row.value.carriers) return;
       if (row.updated_by && window.__sbSession && row.updated_by === window.__sbSession.user.id) return;
       DB = row.value;
+      if (!DB.deleted_mail) DB.deleted_mail = [];
       if (!DB.mail_feed) DB.mail_feed = [];
       try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch (e) {}
       try { showTab(currentTab || "pochta"); } catch (e) {}
