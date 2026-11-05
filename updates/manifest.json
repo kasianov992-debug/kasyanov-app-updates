@@ -18,8 +18,8 @@
     ]
   },
   "code": {
-    "js_url": "app.js",
-    "css_url": "app.css",
+    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@9467d0f2b9ff6ca14fb9b6536973026d628f595d/updates/app.js",
+    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@9467d0f2b9ff6ca14fb9b6536973026d628f595d/updates/app.css",
     "js_sha256": "ab4871cae46f4f24f995c133eef384227bdd5cd588b4891927f933125110df72",
     "css_sha256": "1d29c282061ba2b4332197ebda6ee5a13cc224942cb797f1943c735627b93b13"
   },
