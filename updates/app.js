@@ -1261,7 +1261,7 @@ function estimateByDistance(nf, nt, weightT) {
     fit20: f20, fit40: f40,
     rub_km_20: rubKm20, rub_km_40: rubKm40,
     analogs: top,
-    method: "оценка по расстоянию (" + Math.round(rd.km) + " км), не точная"
+    method: ""
   };
 }
 function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload, containerType) {
@@ -1449,14 +1449,9 @@ function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload, con
       if (ctype === "40") p40 = picked;
       else p20 = picked;
       pairText = fmtOneRate(primary);
-      method = distInfo.method;
-      confidence = "оценка по км";
-      const fit = ctype === "40" ? distInfo.fit40 : distInfo.fit20;
-      const fitName = ctype === "40" ? "40'" : "20'";
-      warning = "Это оценка по расстоянию (" + distInfo.km + " км) для " + typeTitle + ", не точная ставка. " +
-        "Считается из ваших прошлых ставок: цена = a + b·км" +
-        (fit ? (" (" + fitName + ": a=" + Math.round(fit.fit.a) + ", b=" + fit.fit.b.toFixed(1) + " ₽/км, n=" + fit.n + ", " + fit.scope + ")") : "") +
-        ".";
+      method = "";
+      confidence = "ориентир";
+      warning = "";
       has_proposal = true;
       for (const a of distInfo.analogs) {
         sources.push({
@@ -1595,7 +1590,7 @@ function showStavkiResult() {
     html += `<div class="pair">${esc(r.pair_text)} <span class="chip">${esc(r.container_label || "")}</span> <span style="font-size:1rem;font-weight:600">${esc(r.vat)}</span></div>
       <p>Перевес: <strong>${esc(r.overweight)}</strong> · Уверенность: <span class="chip ${r.is_estimate?"warn":""}">${esc(r.confidence)}</span>
       ${r.distance_km?` · ${r.distance_km} км`:""}</p>`;
-    if (r.method) html += `<p class="muted">${esc(r.method)}</p>`;
+    if (r.method && !/оценк|a \+|₽\/км|\bn=/.test(r.method)) html += `<p class="muted">${esc(r.method)}</p>`;
   } else {
     html += `<div class="pair" style="color:var(--warn)">${esc(r.pair_text)}</div>`;
     if (r.unknown_city && r.unknown_city.length) {
@@ -1604,7 +1599,9 @@ function showStavkiResult() {
   }
   for (const e of r.extras) html += `<div class="chip">${esc(e)}</div>`;
   for (const v of r.variants_note) html += `<p class="muted">${esc(v)}</p>`;
-  if (r.warning) html += `<div class="warn-box">${esc(r.warning)}</div>`;
+  if (r.warning && !/оценк[аи] по расстоянию|a \+ b|₽\/км|\bn=/.test(r.warning)) {
+    html += `<div class="warn-box">${esc(r.warning)}</div>`;
+  }
   if (r.carrier_lanes.length) {
     html += `<h3 style="margin-top:16px">Рынок перевозчиков (MAX)</h3>`;
     if (r.market_median_note) html += `<p class="muted">Медиана рынка по найденным плечам: <strong>${money(r.market_median_note)}</strong> ₽ (без НДС у перевозчиков)</p>`;
