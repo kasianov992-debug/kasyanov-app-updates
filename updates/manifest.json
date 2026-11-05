@@ -1,7 +1,7 @@
 {
-  "version": "1.1.5",
-  "released_at": "2026-11-03T09:54:17Z",
-  "notes": "Автообновление: код и рыночные ставки (без персональных данных)",
+  "version": "1.1.6",
+  "released_at": "2026-11-05T12:35:15Z",
+  "notes": "1.1.6: калькулятор — выбор контейнера (20′, 40′, реф) и сумма полными рублями; в Почте можно удалить письмо из списка. Без персональных данных.",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -18,9 +18,9 @@
     ]
   },
   "code": {
-    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@9ff0d8bd0a3646272b759b0ac681401091f66e0a/updates/app.js",
-    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@9ff0d8bd0a3646272b759b0ac681401091f66e0a/updates/app.css",
-    "js_sha256": "f1c65217923083bcedac3c106dbe9490fac7f496421a6129f8015253000265c7",
+    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@9467d0f2b9ff6ca14fb9b6536973026d628f595d/updates/app.js",
+    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@9467d0f2b9ff6ca14fb9b6536973026d628f595d/updates/app.css",
+    "js_sha256": "ab4871cae46f4f24f995c133eef384227bdd5cd588b4891927f933125110df72",
     "css_sha256": "1d29c282061ba2b4332197ebda6ee5a13cc224942cb797f1943c735627b93b13"
   },
   "data": {
