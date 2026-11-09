@@ -245,3 +245,24 @@ body.login-mode .app-shell{visibility:hidden}
 .rolis-life-form h3{margin:14px 0 8px;font-size:.95rem}
 .rolis-life-form h3:first-child{margin-top:0}
 .rolis-chip{display:inline-block;background:var(--chip);color:var(--accent);border-radius:999px;padding:1px 8px;font-size:.75rem;font-weight:700;vertical-align:middle}
+
+/* Грайл — ИИ-помощник (1.1.9). Separate from the staff .chat-* layout. */
+.grail-card{padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:520px}
+.grail-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}
+.grail-messages{flex:1;overflow:auto;padding:14px;min-height:320px;max-height:520px;background:#f8fafc}
+.grail-row{display:flex;margin:0 0 10px}
+.grail-row.user{justify-content:flex-end}
+.grail-row.assistant{justify-content:flex-start}
+.grail-bubble{max-width:min(85%,640px);background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 12px}
+.grail-row.user .grail-bubble{background:#e8f5ef;border-color:#b7e0cf}
+.grail-meta{font-size:.75rem;color:var(--muted);margin-bottom:4px}
+.grail-text{white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere}
+.grail-thinking .grail-text{color:var(--muted);font-style:italic}
+.grail-actions{margin-top:8px}
+.grail-rule{margin-top:8px}
+.grail-compose{display:flex;gap:8px;padding:12px 14px 0;align-items:flex-end;border-top:1px solid var(--line)}
+.grail-compose textarea{flex:1;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;min-height:52px;max-height:180px;resize:vertical;background:#fff}
+.grail-hint{padding:8px 14px 14px;margin:0}
+.grail-error{margin:10px 14px 0;background:#fef2f2;border:1px solid #fecaca;color:var(--err);padding:8px 10px;border-radius:8px;font-weight:600}
+.grail-error[hidden]{display:none!important}
+.grail-empty{margin:8px 0}

@@ -1,7 +1,7 @@
 {
   "version": "1.2.0",
-  "released_at": "2026-11-09T18:40:00Z",
-  "notes": "1.2.0: карточка контейнера: порт, вывоз, перетарка, возврат порожнего",
+  "released_at": "2026-11-09T18:50:00Z",
+  "notes": "1.2.0: карточка контейнера в РОЛИС + ИИ-помощник Грайл",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -18,10 +18,10 @@
     ]
   },
   "code": {
-    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@14c677cec8c312b5e47a9f0eda465a19dd8388b8/updates/app.js",
-    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@14c677cec8c312b5e47a9f0eda465a19dd8388b8/updates/app.css",
-    "js_sha256": "3aec86035782fb43e5748c979116cc99301639ea4bd831e219a82b1d5fe30fd5",
-    "css_sha256": "a9157b27cec81cf663041639a28e023cd71bd609349de06a452cf09cb042b680"
+    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@8a809ab34efa04a814f9aaf2f1d63dfab45c64d4/updates/app.js",
+    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@8a809ab34efa04a814f9aaf2f1d63dfab45c64d4/updates/app.css",
+    "js_sha256": "fd9e06a7acb3e7307f85c7a9b6c18c649fb17b6f20c98f6651fb528748b15570",
+    "css_sha256": "26e7bb68aee524538074aff7d1cef4c478f85d9183a04073fd2920d64cc81b5f"
   },
   "data": {
     "quotes_url": "quotes_public.json",
