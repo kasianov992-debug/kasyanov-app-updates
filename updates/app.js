@@ -558,6 +558,7 @@ document.getElementById("nav").addEventListener("click", (e) => {
 });
 function showTab(tab, opts) {
   opts = opts || {};
+  try { if (window.ensureGrailNavButton) window.ensureGrailNavButton(); } catch (e) {}
   // Leaving an open заявка form?
   const leavingForm = zayavkaFormBaseline != null && !(tab === "zayavki" && (opts.mode === "new" || opts.mode === "edit"));
   if (leavingForm) {
@@ -589,6 +590,7 @@ function showTab(tab, opts) {
   else if (tab === "backup") main.innerHTML = renderBackup();
   else if (tab === "chat") main.innerHTML = (typeof renderChat === "function" ? renderChat() : "<p>Чат недоступен</p>");
   else if (tab === "rolis") main.innerHTML = (typeof renderRolis === "function" ? renderRolis() : "<p>РОЛИС недоступен</p>");
+  else if (tab === "grail") main.innerHTML = (window.renderGrail ? window.renderGrail() : "<p>Грайл недоступен</p>");
   else main.innerHTML = renderPochta();
   bindTabHandlers(tab);
 }
@@ -2869,6 +2871,9 @@ function bindTabHandlers(tab) {
   }
   if (tab === "rolis") {
     if (typeof bindRolisHandlers === "function") bindRolisHandlers();
+  }
+  if (tab === "grail") {
+    if (window.bindGrailHandlers) window.bindGrailHandlers();
   }
   if (tab === "backup") {
     document.getElementById("btn-export-bak").onclick = exportBackup;
@@ -5305,5 +5310,351 @@ function installSupabaseAwareUpdater() {
   if (typeof document !== "undefined") {
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", tick);
     else tick();
+  }
+})();
+
+/* === Грайл — ИИ-помощник (1.1.9) ===
+   Wrapped so new bindings cannot collide with shell-level const (that blanked the app before). */
+(function initGrailChat() {
+  var GRAIL_STORE_KEY = "ip_kasyanov_grail_v1";
+  var GRAIL_CHAT_URL = "https://vourhkrahnbuugwfdgmt.supabase.co/functions/v1/grail-chat";
+  var GRAIL_HINT = "Чтобы научить Грайла: начните сообщение со слов „Запомни:“ или „Нет, …“";
+  var grailPending = false;
+  var grailError = "";
+  var grailReqGen = 0;
+
+  function grailAnonKey() {
+    try {
+      if (typeof SUPABASE_ANON_KEY === "string" && SUPABASE_ANON_KEY) return SUPABASE_ANON_KEY;
+    } catch (e) {}
+    return "";
+  }
+
+  function grailNewSessionId() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+    } catch (e) {}
+    return "grail-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+  }
+
+  function grailDefaultState() {
+    return { session_id: grailNewSessionId(), mode: "chat", messages: [] };
+  }
+
+  function grailLoad() {
+    try {
+      var raw = localStorage.getItem(GRAIL_STORE_KEY);
+      if (raw) {
+        var d = JSON.parse(raw);
+        if (d && typeof d.session_id === "string" && d.session_id) {
+          if (d.mode !== "ad") d.mode = "chat";
+          if (!Array.isArray(d.messages)) d.messages = [];
+          return d;
+        }
+      }
+    } catch (e) {}
+    var fresh = grailDefaultState();
+    grailSave(fresh);
+    return fresh;
+  }
+
+  function grailSave(d) {
+    try { localStorage.setItem(GRAIL_STORE_KEY, JSON.stringify(d)); } catch (e) {}
+  }
+
+  function grailHttpError(status) {
+    if (status === 400) return "Не удалось отправить сообщение. Проверьте текст и попробуйте ещё раз.";
+    if (status === 500) return "Грайл временно недоступен. Попробуйте позже.";
+    if (status === 502) return "Грайл не смог ответить. Попробуйте ещё раз через минуту.";
+    return "Не удалось получить ответ Грайла. Попробуйте ещё раз.";
+  }
+
+  function grailFail(message) {
+    var err = new Error(message);
+    err.grailFriendly = true;
+    return err;
+  }
+
+  async function grailRequest(sessionId, message, mode) {
+    var key = grailAnonKey();
+    var res;
+    try {
+      res = await fetch(GRAIL_CHAT_URL, {
+        method: "POST",
+        headers: {
+          apikey: key,
+          Authorization: "Bearer " + key,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          session_id: sessionId,
+          message: message,
+          mode: mode === "ad" ? "ad" : "chat"
+        })
+      });
+    } catch (e) {
+      throw grailFail("Нет связи с Грайлом. Проверьте интернет и попробуйте ещё раз.");
+    }
+    if (!res.ok) throw grailFail(grailHttpError(res.status));
+    try { return await res.json(); } catch (e) { return {}; }
+  }
+
+  function grailMessagesHtml(st) {
+    var html = "";
+    var msgs = (st && st.messages) || [];
+    if (!msgs.length && !grailPending) {
+      html += '<p class="muted grail-empty">Спросите ставку или попросите текст объявления.</p>';
+    }
+    for (var i = 0; i < msgs.length; i++) {
+      var m = msgs[i];
+      if (!m) continue;
+      var isUser = m.role === "user";
+      var copyBtn = (!isUser && m.mode === "ad")
+        ? '<div class="grail-actions"><button type="button" class="btn small ghost" data-grail-copy="' + i + '">Копировать</button></div>'
+        : "";
+      var badge = (!isUser && m.rule_saved != null)
+        ? '<div class="chip grail-rule">✓ Правило сохранено</div>'
+        : "";
+      html += '<div class="grail-row ' + (isUser ? "user" : "assistant") + '">' +
+        '<div class="grail-bubble">' +
+          '<div class="grail-meta">' + (isUser ? "Вы" : "Грайл") + "</div>" +
+          '<div class="grail-text">' + esc(m.text || "") + "</div>" +
+          badge + copyBtn +
+        "</div></div>";
+    }
+    if (grailPending) {
+      html += '<div class="grail-row assistant"><div class="grail-bubble grail-thinking">' +
+        '<div class="grail-meta">Грайл</div><div class="grail-text">Грайл думает…</div>' +
+        "</div></div>";
+    }
+    return html;
+  }
+
+  function renderGrail() {
+    var st = grailLoad();
+    var chatOn = st.mode !== "ad";
+    var placeholder = chatOn
+      ? "Спросите про ставку, маршрут, контейнер…"
+      : "Опишите объявление: маршрут, контейнер, условия…";
+    return '<h1>Грайл</h1>' +
+      '<div class="card grail-card">' +
+        '<div class="grail-toolbar">' +
+          '<button type="button" class="btn small' + (chatOn ? "" : " ghost") + '" id="grail-mode-chat" aria-pressed="' + (chatOn ? "true" : "false") + '">Вопрос</button>' +
+          '<button type="button" class="btn small' + (chatOn ? " ghost" : "") + '" id="grail-mode-ad" aria-pressed="' + (chatOn ? "false" : "true") + '">Объявление</button>' +
+          '<button type="button" class="btn small ghost" id="grail-new">Новый диалог</button>' +
+        "</div>" +
+        '<div id="grail-messages" class="grail-messages" aria-live="polite">' + grailMessagesHtml(st) + "</div>" +
+        '<div id="grail-error" class="grail-error"' + (grailError ? "" : " hidden") + ">" + esc(grailError) + "</div>" +
+        '<div class="grail-compose">' +
+          '<textarea id="grail-input" rows="2" maxlength="4000" placeholder="' + esc(placeholder) + '"' + (grailPending ? " disabled" : "") + "></textarea>" +
+          '<button type="button" class="btn" id="grail-send"' + (grailPending ? " disabled" : "") + ">Отправить</button>" +
+        "</div>" +
+        '<p class="note grail-hint">' + GRAIL_HINT + "</p>" +
+      "</div>";
+  }
+
+  function grailPaint() {
+    var box = document.getElementById("grail-messages");
+    if (!box) return;
+    box.innerHTML = grailMessagesHtml(grailLoad());
+    box.scrollTop = box.scrollHeight;
+    var err = document.getElementById("grail-error");
+    if (err) {
+      err.textContent = grailError || "";
+      err.hidden = !grailError;
+    }
+    var send = document.getElementById("grail-send");
+    var ta = document.getElementById("grail-input");
+    if (send) send.disabled = !!grailPending;
+    if (ta) ta.disabled = !!grailPending;
+  }
+
+  function grailSetMode(mode) {
+    var st = grailLoad();
+    st.mode = mode === "ad" ? "ad" : "chat";
+    grailSave(st);
+    var chatOn = st.mode !== "ad";
+    var chatBtn = document.getElementById("grail-mode-chat");
+    var adBtn = document.getElementById("grail-mode-ad");
+    if (chatBtn) {
+      chatBtn.className = "btn small" + (chatOn ? "" : " ghost");
+      chatBtn.setAttribute("aria-pressed", chatOn ? "true" : "false");
+    }
+    if (adBtn) {
+      adBtn.className = "btn small" + (chatOn ? " ghost" : "");
+      adBtn.setAttribute("aria-pressed", chatOn ? "false" : "true");
+    }
+    var ta = document.getElementById("grail-input");
+    if (ta) {
+      ta.placeholder = chatOn
+        ? "Спросите про ставку, маршрут, контейнер…"
+        : "Опишите объявление: маршрут, контейнер, условия…";
+    }
+  }
+
+  function grailNewDialog() {
+    grailReqGen++;
+    grailPending = false;
+    grailError = "";
+    var st = grailLoad();
+    grailSave({
+      session_id: grailNewSessionId(),
+      mode: st.mode === "ad" ? "ad" : "chat",
+      messages: []
+    });
+    var ta = document.getElementById("grail-input");
+    if (ta) { ta.disabled = false; ta.value = ""; }
+    var send = document.getElementById("grail-send");
+    if (send) send.disabled = false;
+    if (document.getElementById("grail-messages")) grailPaint();
+  }
+
+  async function grailCopyText(text) {
+    var value = String(text || "");
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        var area = document.createElement("textarea");
+        area.value = value;
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand("copy");
+        area.remove();
+      }
+      if (typeof toast === "function") toast("Скопировано");
+    } catch (e) {
+      if (typeof toast === "function") toast("Не удалось скопировать");
+    }
+  }
+
+  async function grailSend() {
+    if (grailPending) return;
+    var ta = document.getElementById("grail-input");
+    var text = ta ? String(ta.value || "").trim() : "";
+    if (!text) return;
+    if (text.length > 4000) text = text.slice(0, 4000);
+    var st = grailLoad();
+    var mode = st.mode === "ad" ? "ad" : "chat";
+    var sessionId = st.session_id;
+    st.messages.push({ role: "user", text: text, mode: mode });
+    if (st.messages.length > 200) st.messages = st.messages.slice(-200);
+    grailSave(st);
+    grailError = "";
+    var gen = ++grailReqGen;
+    grailPending = true;
+    if (ta) ta.value = "";
+    grailPaint();
+    try {
+      var data = await grailRequest(sessionId, text, mode);
+      if (gen !== grailReqGen) return;
+      var cur = grailLoad();
+      if (!cur || cur.session_id !== sessionId) return;
+      var reply = (data && data.reply != null) ? String(data.reply) : "";
+      if (!reply.trim()) reply = "Грайл прислал пустой ответ. Попробуйте переформулировать вопрос.";
+      cur.messages.push({
+        role: "assistant",
+        text: reply,
+        mode: mode,
+        rule_saved: (data && data.rule_saved != null) ? data.rule_saved : null
+      });
+      if (cur.messages.length > 200) cur.messages = cur.messages.slice(-200);
+      grailSave(cur);
+    } catch (e) {
+      if (gen !== grailReqGen) return;
+      var cur2 = grailLoad();
+      if (cur2 && cur2.session_id === sessionId) {
+        var last = cur2.messages[cur2.messages.length - 1];
+        if (last && last.role === "user" && last.text === text) cur2.messages.pop();
+        grailSave(cur2);
+        var input = document.getElementById("grail-input");
+        if (input && !String(input.value || "").trim()) input.value = text;
+      }
+      grailError = (e && e.grailFriendly && e.message)
+        ? e.message
+        : "Не удалось получить ответ Грайла. Попробуйте ещё раз.";
+    } finally {
+      if (gen === grailReqGen) {
+        grailPending = false;
+        if (document.getElementById("grail-messages")) grailPaint();
+      }
+    }
+  }
+
+  function bindGrailHandlers() {
+    var chatBtn = document.getElementById("grail-mode-chat");
+    var adBtn = document.getElementById("grail-mode-ad");
+    if (chatBtn) chatBtn.onclick = function () { grailSetMode("chat"); };
+    if (adBtn) adBtn.onclick = function () { grailSetMode("ad"); };
+    var neu = document.getElementById("grail-new");
+    if (neu) neu.onclick = function () { grailNewDialog(); };
+    var send = document.getElementById("grail-send");
+    if (send) send.onclick = function () { grailSend(); };
+    var ta = document.getElementById("grail-input");
+    if (ta) {
+      ta.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          e.preventDefault();
+          grailSend();
+        }
+      });
+    }
+    var box = document.getElementById("grail-messages");
+    if (box && !box._grailCopyBound) {
+      box.addEventListener("click", function (e) {
+        var t = e.target;
+        var b = t && t.closest ? t.closest("[data-grail-copy]") : null;
+        if (!b) return;
+        var idx = Number(b.getAttribute("data-grail-copy"));
+        var st = grailLoad();
+        var m = st.messages[idx];
+        if (m && m.text) grailCopyText(m.text);
+      });
+      box._grailCopyBound = true;
+    }
+    grailPaint();
+  }
+
+  function ensureGrailNavButton() {
+    var nav = document.getElementById("nav");
+    if (!nav || nav.querySelector('button[data-tab="grail"]')) return;
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.setAttribute("data-tab", "grail");
+    btn.textContent = "Грайл";
+    var stavki = nav.querySelector('button[data-tab="stavki"]');
+    if (!stavki) {
+      var buttons = nav.querySelectorAll("button");
+      for (var i = 0; i < buttons.length; i++) {
+        var label = (buttons[i].textContent || "").replace(/\s+/g, " ").trim();
+        if (label.indexOf("Ставки") === 0) { stavki = buttons[i]; break; }
+      }
+    }
+    if (stavki && stavki.parentNode) {
+      if (stavki.nextSibling) stavki.parentNode.insertBefore(btn, stavki.nextSibling);
+      else stavki.parentNode.appendChild(btn);
+    } else {
+      nav.appendChild(btn);
+    }
+  }
+
+  window.renderGrail = renderGrail;
+  window.bindGrailHandlers = bindGrailHandlers;
+  window.ensureGrailNavButton = ensureGrailNavButton;
+
+  function bootGrailNav() {
+    try { ensureGrailNavButton(); } catch (e) {}
+  }
+  bootGrailNav();
+  var grailNavTries = 0;
+  var grailNavTimer = setInterval(function () {
+    grailNavTries++;
+    bootGrailNav();
+    if (grailNavTries >= 20 || document.querySelector('#nav button[data-tab="grail"]')) {
+      clearInterval(grailNavTimer);
+    }
+  }, 300);
+  if (typeof document !== "undefined" && document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootGrailNav);
   }
 })();

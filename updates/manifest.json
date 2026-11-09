@@ -1,7 +1,7 @@
 {
-  "version": "1.1.8",
-  "released_at": "2026-11-09T16:45:00Z",
-  "notes": "1.1.8: подбор ставки по точному маршруту, типу контейнера, весу и сдаче порожнего. Близкие направления без формулы по километражу. Без персональных данных.",
+  "version": "1.1.9",
+  "released_at": "2026-11-09T18:05:00Z",
+  "notes": "1.1.9: ИИ-помощник Грайл",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -18,10 +18,10 @@
     ]
   },
   "code": {
-    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@ac42f919b95eb7708ccc6b94d3d4904ad74b7a33/updates/app.js",
-    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@ac42f919b95eb7708ccc6b94d3d4904ad74b7a33/updates/app.css",
-    "js_sha256": "b8afcb113d1c954054ba1c78e9b0cf2e0c8b5a96ac0883fd0944771a64b5eb82",
-    "css_sha256": "1d29c282061ba2b4332197ebda6ee5a13cc224942cb797f1943c735627b93b13"
+    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@8a809ab34efa04a814f9aaf2f1d63dfab45c64d4/updates/app.js",
+    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@8a809ab34efa04a814f9aaf2f1d63dfab45c64d4/updates/app.css",
+    "js_sha256": "5880745a3edf7432c957cf2ed8d7b21a42aa8cdb0a09f7b62860b2ada00ee0f1",
+    "css_sha256": "36cc65dbcd46b0be5bd2d801bc33ffb393c0ec18452eacd7fa3962260d7c1f31"
   },
   "data": {
     "quotes_url": "quotes_public.json",
