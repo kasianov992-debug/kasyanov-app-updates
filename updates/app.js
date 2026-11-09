@@ -897,9 +897,9 @@ function printZayavka(z) {
 }
 const ALIASES = {
   "спб":"спб","питер":"спб","санкт-петербург":"спб","с-петербург":"спб","петербург":"спб",
-  "плп":"плп","петролеспорт":"спб","бронка":"спб","пкт":"спб",
+  "плп":"спб","петролеспорт":"спб","бронка":"спб","пкт":"спб","ктсп":"спб","шушары":"спб","стрельна":"спб",
   "новороссийск":"новороссийск","ново":"новороссийск","нврск":"новороссийск","порт ново":"новороссийск",
-  "нврс":"новороссийск","нутеп":"нутеп","нутэп":"нутеп","нмтп":"нмтп","нтл":"новороссийск","раевская":"новороссийск",
+  "нврс":"новороссийск","нутеп":"новороссийск","нутэп":"новороссийск","нмтп":"новороссийск","нтл":"новороссийск","раевская":"новороссийск",
   "москва":"москва","мск":"москва","химки":"москва","котельники":"москва",
   "казань":"казань","краснодар":"краснодар","тимашевск":"краснодар",
   "ростов":"ростов","ростов-на-дону":"ростов","ростов на дону":"ростов",
@@ -920,9 +920,9 @@ const ALIASES = {
   "покров":"покров","киржач":"киржач","кимры":"кимры","ермолино":"ермолино",
   "лебедянь":"лебедянь","чегем":"чегем","саратов":"саратов",
   "сочи":"сочи","адлер":"сочи",
-  "нутеп":"нутеп","нутэп":"нутеп","нмтп":"нмтп","новоморснаб":"новороссийск",
+  "нутеп":"новороссийск","нутэп":"новороссийск","нмтп":"новороссийск","новоморснаб":"новороссийск",
   "юкк":"новороссийск","рускон":"новороссийск","нк-депо":"новороссийск","нк депо":"новороссийск",
-  "терминал плп":"плп"
+  "верхняя баканка":"новороссийск","терминал плп":"спб","терминал нутеп":"новороссийск"
 };
 
 const DEST_REGION = {
@@ -933,7 +933,11 @@ const DEST_REGION = {
   "бритово":"москва","покров":"москва-восток","киржач":"москва-восток",
   "спб":"спб","гатчина":"спб","новороссийск":"новороссийск","анапа":"новороссийск","геленджик":"новороссийск",
   "ростов":"ростов","таганрог":"ростов","казань":"казань","саратов":"саратов","краснодар":"краснодар",
-  "тимашевск":"краснодар","пятигорск":"пятигорск","чегем":"пятигорск","сочи":"сочи","адлер":"сочи","нутеп":"новороссийск","нмтп":"новороссийск","плп":"спб"
+  "тимашевск":"краснодар","пятигорск":"пятигорск","чегем":"пятигорск","сочи":"сочи","адлер":"сочи","нутеп":"новороссийск","нмтп":"новороссийск","плп":"спб",
+  "бронка":"спб","ктсп":"спб","шушары":"спб","видное":"москва","мытищи":"москва","ногинск":"москва","подольск":"москва",
+  "раменское":"москва","ступино":"москва-юг","чехов":"москва-юг","мосрентген":"москва","ворсино":"москва-юг",
+  "азов":"ростов","аксай":"ростов","батайск":"ростов","волжский":"волгоград","кропоткин":"краснодар",
+  "отрадный":"самара","зеленокумск":"ставрополь","татаново":"тамбов"
 };
 /* Приблизительные координаты городов (широта, долгота) — для оценки ₽/км */
 const CITY_COORDS = {
@@ -963,6 +967,15 @@ const CITY_COORDS = {
   "валуйки":[50.21,38.10], "алексеевка":[50.63,38.69],
   "сочи":[43.60,39.73], "адлер":[43.44,39.92],
   "нутеп":[44.725,37.780], "нмтп":[44.724,37.795], "плп":[59.88,30.22],
+  "бронка":[59.93,29.65], "ктсп":[59.89,30.15], "шушары":[59.78,30.45],
+  "волжский":[48.79,44.77], "буденновск":[44.78,44.17], "азов":[47.10,39.42],
+  "аксай":[47.26,39.87], "батайск":[47.14,39.75], "великий новгород":[58.52,31.27],
+  "видное":[55.55,37.71], "ворсино":[55.23,36.68], "гагарин":[55.55,34.99],
+  "зеленокумск":[44.41,43.88], "кропоткин":[45.44,40.58], "мосрентген":[55.62,37.47],
+  "мытищи":[55.91,37.73], "ногинск":[55.87,38.44], "орел":[52.97,36.06],
+  "отрадный":[53.38,51.35], "подольск":[55.43,37.54], "раменское":[55.57,38.22],
+  "ступино":[54.89,38.08], "татаново":[52.72,41.45], "чехов":[55.15,37.48],
+  "гизель":[43.04,44.57], "верхняя баканка":[44.85,37.66],
 "нальчик":[43.49,43.62], "владикавказ":[43.02,44.68],
   "красноярск":[56.01,92.87], "иркутск":[52.29,104.28], "хабаровск":[48.48,135.07],
   "калининград":[54.71,20.51], "мурманск":[68.97,33.09], "архангельск":[64.54,40.54],
@@ -992,6 +1005,9 @@ function normalizePlace(s) {
     if (k.length >= 4 && (s.includes(k) || k.includes(s))) return ALIASES[k] || k;
   }
   return s;
+}
+function canonPlace(s) {
+  return normalizePlace(s);
 }
 function destRegion(norm) {
   if (!norm) return "";
@@ -1024,50 +1040,63 @@ function roadKm(fromName, toName) {
   if (!a || !b) return null;
   return {km: haversineKm(a.coords, b.coords) * 1.2, fromKey:a.key, toKey:b.key};
 }
-/** Реальная точка выгрузки (не сдача порожнего). Кругорейсы «порожний Ново → город → СПб» не считать Ново→СПб. */
+function segmentPlace(s) {
+  let t = String(s || "").replace(/ё/g, "е");
+  t = t.replace(/^\(\s*\d\s*\)\s*/, "");
+  t = t.split("(")[0];
+  return canonPlace(t);
+}
+/** Прямое плечо. Кругорейс и «порожний → город, сдача в порт» не считаем прямой ставкой. */
 function quoteEndpoints(q) {
   const rf = String(q.route_from || "");
   const rt = String(q.route_to || "");
-  const blob = (q.quote_raw || "") + " " + (q.conditions || "") + " " + (q.return_empty || "");
-  let from = q.from_norm || normalizePlace(rf);
-  let to = q.to_norm || normalizePlace(rt);
+  const blob = (q.quote_raw || "") + " " + (q.conditions || "") + " " + (q.return_empty || "") + " " + (q.container || "");
+  let from = q.from_norm || segmentPlace(rf);
+  let to = q.to_norm || segmentPlace(rt);
   let is_roundtrip = false;
   let is_empty_only = false;
+  const rfLow = rf.toLowerCase().replace(/ё/g, "е");
+  const rawLow = String(q.quote_raw || "").toLowerCase().replace(/ё/g, "е");
 
-  if (/порожн/i.test(rf) && /→|->/.test(rf)) {
+  if (/→|->/.test(rf)) {
     is_roundtrip = true;
-    const m = rf.match(/(?:→|->)\s*(.+)$/);
-    if (m) {
-      to = normalizePlace(m[1]);
-      from = normalizePlace(rf.split(/→|->/)[0]) || from;
+    const parts = rf.split(/→|->/).map(segmentPlace).filter(Boolean);
+    if (parts.length) {
+      from = parts[0];
+      to = parts[parts.length - 1];
     }
-  } else if (/\(\s*1\s*\)/.test(rf) && /\(\s*2\s*\)/.test(rf) && /→|->/.test(rf)) {
-    /* «(1) Ново; (2) СПб → Котельники → СПб» — выгрузка в Котельниках */
+  } else if (/\(порожн|порожний\)|порожний\s*[–\-→]/.test(rfLow + " " + rawLow)) {
     is_roundtrip = true;
-    const m = rf.match(/(?:→|->)\s*([^→\->]+)/);
-    if (m) to = normalizePlace(m[1]);
   }
 
-  if (!is_roundtrip && /вывоз порожн|порожние|порожних|порожний контейнер/i.test(blob)) {
+  if (!is_roundtrip && /сдач|возврат/i.test(rt)) {
+    const head = segmentPlace(rt);
+    if (head && head !== canonPlace(to)) to = head;
+  }
+
+  const emptyBlob = blob.toLowerCase().replace(/ё/g, "е");
+  if (!is_roundtrip && /вывоз порожн|порожние контейнер|порожних контейнер|порожний контейнер|порожн(?:ых|ие|ий)\s+реф|rf\s*empty|\bempty\b/.test(emptyBlob)) {
     is_empty_only = true;
   }
-  if (!from) from = normalizePlace(rf);
-  if (!to) to = normalizePlace(rt);
+  from = canonPlace(from);
+  to = canonPlace(to);
   return {from, to, is_roundtrip, is_empty_only, delivery_raw: to};
 }
 function scoreMatch(qFrom, qTo, rowFrom, rowTo) {
-  const rf = (rowFrom || "").toLowerCase();
-  const rt = (rowTo || "").toLowerCase();
+  const qf = canonPlace(qFrom);
+  const qt = canonPlace(qTo);
+  const rf = canonPlace(rowFrom);
+  const rt = canonPlace(rowTo);
   let fromScore = 0, toScore = 0;
-  if (qFrom && rf) {
-    if (qFrom === rf) fromScore = 50;
-    else if (qFrom.includes(rf) || rf.includes(qFrom)) fromScore = 25;
-    else if (destRegion(qFrom) && destRegion(qFrom) === destRegion(rf)) fromScore = 25;
+  if (qf && rf) {
+    if (qf === rf) fromScore = 50;
+    else if (qf.includes(rf) || rf.includes(qf)) fromScore = 25;
+    else if (destRegion(qf) && destRegion(qf) === destRegion(rf)) fromScore = 25;
   }
-  if (qTo && rt) {
-    if (qTo === rt) toScore = 50;
-    else if (qTo.includes(rt) || rt.includes(qTo)) toScore = 25;
-    else if (destRegion(qTo) && destRegion(qTo) === destRegion(rt)) toScore = 25;
+  if (qt && rt) {
+    if (qt === rt) toScore = 50;
+    else if (qt.includes(rt) || rt.includes(qt)) toScore = 25;
+    else if (destRegion(qt) && destRegion(qt) === destRegion(rt)) toScore = 25;
   }
   return {total: fromScore + toScore, fromScore, toScore};
 }
@@ -1144,11 +1173,117 @@ function positivePrice(v) {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
+function quoteContainerKind(q) {
+  if (!q) return "other";
+  if (isReeferQuote(q)) return "rf";
+  const cn = String(q.cont_norm || "").toLowerCase().replace(/ё/g, "е").trim();
+  const box = String(q.container || "").toLowerCase().replace(/ё/g, "е");
+  const text = (box + " " + String(q.quote_raw || "")).toLowerCase().replace(/ё/g, "е");
+  if (cn === "тент/перетарка") return "other";
+  if (/фура|тент|перетарк|бигбэг/.test(text) && !/20|40|контейнер|\bктк\b/.test(text)) return "other";
+  const bothTxt = /20\s*\/\s*40|40\s*\/\s*20|20\s*и\s*40|20к[аи].{0,16}40|20['′]?\s*\/\s*40/.test(text);
+  if (cn === "20/40" || cn === "40/20" || bothTxt) return "both";
+  const p20 = positivePrice(q.price_20), p40 = positivePrice(q.price_40);
+  if (cn === "20") {
+    if (/^40\b|40hc|40dc|40'/.test(box.trim()) && !p20 && p40) return "40";
+    return "20";
+  }
+  if (cn === "40") return "40";
+  if (cn === "реф") return "rf";
+  const has20 = /(?:^|[^0-9])20(?:dc|dv|hc|ка|'|′|фт|\b)/.test(text);
+  const has40 = /(?:^|[^0-9])40(?:dc|hc|ка|'|′|фт|\b)/.test(text);
+  if (has20 && has40) return "both";
+  if (has40) return "40";
+  if (has20) return "20";
+  if (p20 && p40) return "both";
+  if (p40) return "40";
+  if (p20) return "20";
+  return "other";
+}
 function selectedQuotePrice(q, ctype) {
   if (!q) return null;
-  if (ctype === "40") return positivePrice(q.price_40);
-  if (ctype === "rf") return positivePrice(q.price_40) || positivePrice(q.price_20);
+  const kind = quoteContainerKind(q);
+  if (ctype === "rf") {
+    if (kind !== "rf") return null;
+    return positivePrice(q.price_40) || positivePrice(q.price_20);
+  }
+  if (kind === "rf" || kind === "other") return null;
+  if (ctype === "40") {
+    if (kind === "20") return null;
+    return positivePrice(q.price_40);
+  }
+  if (kind === "40") return null;
   return positivePrice(q.price_20);
+}
+function roundToThousand(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return null;
+  return Math.round(v / 1000) * 1000;
+}
+function netOfVat(q, amount) {
+  if (amount == null) return null;
+  const vat = String((q && q.vat) || "").toLowerCase().replace(/ё/g, "е");
+  const raw = String((q && q.quote_raw) || "").toLowerCase().replace(/ё/g, "е");
+  if (/без\s*ндс/.test(vat)) return amount;
+  const rawNet = /плюс\s*ндс|\+\s*5\s*%|\+\s*ндс|без\s*ндс|ндс\s*сверху/.test(raw);
+  const rawGross = /включая\s*ндс|(?:^|[^а-я+])с\s*ндс/.test(raw);
+  if (rawGross && !rawNet) {
+    const rate = (/22\s*%/.test(raw) && !/5\s*%/.test(raw)) ? 0.22 : 0.05;
+    return amount / (1 + rate);
+  }
+  if (rawNet || /плюс\s*ндс|\+\s*ндс|\+\s*5|сверху/.test(vat)) return amount;
+  if (/включая\s*ндс|(?:^|[^а-я])с\s*ндс/.test(vat)) return amount / 1.05;
+  return amount;
+}
+function quoteWeightT(q) {
+  const w = Number(q && q.weight_t);
+  if (Number.isFinite(w) && w > 0) return w;
+  const raw = String((q && q.quote_raw) || "").toLowerCase().replace(/ё/g, "е");
+  const range = raw.match(/(\d{2}(?:[.,]\d)?)\s*[–\-]\s*(\d{2}(?:[.,]\d)?)\s*т/);
+  if (range) {
+    const a = parseFloat(range[1].replace(",", "."));
+    const b = parseFloat(range[2].replace(",", "."));
+    if (a > 0 && b > 0) return (a + b) / 2;
+  }
+  const one = raw.match(/(?<!до\s)(\d{2}(?:[.,]\d)?)\s*т/);
+  if (one) return parseFloat(one[1].replace(",", "."));
+  return null;
+}
+function quoteIsDrop(q) {
+  const blob = [q && q.return_empty, q && q.conditions, q && q.quote_raw].join(" ").toLowerCase().replace(/ё/g, "е");
+  return /сброс/.test(blob);
+}
+function userReturnIntent(text) {
+  const s = String(text || "").toLowerCase().replace(/ё/g, "е").trim();
+  if (!s) return null;
+  if (/сброс/.test(s)) return {kind: "drop"};
+  const city = canonPlace(s.replace(/^в\s+/, ""));
+  return city ? {kind: "city", city: city} : null;
+}
+function parseReturnVariants(q) {
+  const raw = String((q && q.quote_raw) || "").replace(/ё/g, "е");
+  if (!/тыс/i.test(raw) || !/\d{2,3}\s*\/\s*\d{2,3}/.test(raw)) return null;
+  const parts = raw.split(/;|\n|(?=\bвар\.?\s*\d)|(?=со сдачей)/i).map(function (s) { return s.trim(); }).filter(Boolean);
+  const out = [];
+  const seen = {};
+  for (const part of parts) {
+    const m = part.match(/(\d{2,3})\s*\/\s*(\d{2,3})\s*тыс/i);
+    if (!m) continue;
+    const low = part.toLowerCase();
+    const hasNovo = /новороссий/.test(low) || /(^|[^а-я])ново([^а-я]|$)/.test(low);
+    const hasSpb = /спб|питер|петербург/.test(low);
+    if (hasNovo === hasSpb) continue;
+    const city = hasNovo ? "новороссийск" : "спб";
+    if (seen[city]) continue;
+    seen[city] = 1;
+    out.push({city: city, price_20: Number(m[1]) * 1000, price_40: Number(m[2]) * 1000});
+  }
+  return out.length >= 2 ? out : null;
+}
+function variantAmount(variant, ctype) {
+  if (!variant) return null;
+  if (ctype === "20") return positivePrice(variant.price_20);
+  return positivePrice(variant.price_40);
 }
 function inferLaneOrigin(L) {
   if (L.route_from) return normalizePlace(L.route_from);
@@ -1266,253 +1401,378 @@ function estimateByDistance(nf, nt, weightT) {
 }
 function suggestRate(routeFrom, routeTo, weightT, returnEmpty, secondUnload, containerType) {
   const ctype = normalizeContainerType(containerType);
-  const nf = normalizePlace(routeFrom);
-  const nt = normalizePlace(routeTo);
+  const nf = canonPlace(routeFrom);
+  const nt = canonPlace(routeTo);
   const rd = roadKm(nf, nt);
-  const scored = [];
+  const intent = userReturnIntent(returnEmpty);
+  const typeTitle = containerTypeTitle(ctype);
+
+  function rowOf(q) {
+    const amount = selectedQuotePrice(q, ctype);
+    if (amount == null) return null;
+    let net = netOfVat(q, amount);
+    const variants = parseReturnVariants(q);
+    let variantCity = "";
+    if (intent && intent.kind === "city" && variants) {
+      const hit = variants.filter(function (v) { return v.city === intent.city; })[0];
+      const alt = hit ? variantAmount(hit, ctype) : null;
+      if (alt) {
+        net = alt;
+        variantCity = hit.city;
+      }
+    }
+    net = roundToThousand(net);
+    if (!net) return null;
+    return {
+      q: q,
+      ep: quoteEndpoints(q),
+      net: net,
+      weight: quoteWeightT(q),
+      drop: quoteIsDrop(q),
+      variants: variants,
+      variantCity: variantCity
+    };
+  }
+
+  const rows = [];
   for (const q of allQuotes()) {
-    const ep = quoteEndpoints(q);
-    if (ctype === "rf") {
-      if (!isReeferQuote(q)) continue;
-      if (selectedQuotePrice(q, "rf") == null) continue;
-      /* порожний реф — отдельный тип ставки, его не отбрасываем */
-    } else {
-      if (isReeferQuote(q)) continue;
-      if (ep.is_empty_only) continue; /* порожние — не для гружёного сухого */
-      if (selectedQuotePrice(q, ctype) == null) continue;
-    }
-    let sc = scoreMatch(nf, nt, ep.from, ep.to);
-    if (sc.total < 50) {
-      const sc2 = scoreMatch(nf, nt, (q.from_norm||""), (q.to_norm||""));
-      /* sc2 только если это НЕ кругорейс с чужой выгрузкой */
-      if (!ep.is_roundtrip && sc2.total > sc.total) sc = sc2;
-    }
-    if (sc.fromScore >= 25 && sc.toScore >= 25) {
-      scored.push(Object.assign({}, q, {
-        _score: sc.total, _from: sc.fromScore, _to: sc.toScore,
-        _ep: ep, _roundtrip: ep.is_roundtrip
-      }));
-    }
+    const row = rowOf(q);
+    if (!row) continue;
+    if (ctype !== "rf" && row.ep.is_empty_only) continue;
+    if (row.ep.is_roundtrip) continue;
+    const leg = roadKm(row.ep.from, row.ep.to);
+    if (leg && leg.km > 1200 && row.net < 120000 && ctype !== "rf") continue;
+    if (!row.ep.from || !row.ep.to) continue;
+    rows.push(row);
   }
-  scored.sort((a,b) => b._score - a._score || String(b.date||"").localeCompare(String(a.date||"")));
 
-  /* Рынок перевозчиков: origin из sample_raw */
-  const laneHits = [];
-  for (const L of BASE_LANES) {
-    const lFrom = inferLaneOrigin(L);
-    const lTo = normalizePlace(L.route_to || "");
-    const sc = scoreMatch(nf, nt, lFrom, lTo);
-    let ok = sc.toScore >= 25;
-    if (lFrom) ok = ok && sc.fromScore >= 25;
-    else {
-      const raw = String(L.sample_raw || "").toLowerCase().replace(/ё/g,"е");
-      if (nf === "новороссийск") ok = ok && /новорос|ново\s*-|ново\s|нврск|нврс|раевск|терминал ново/.test(raw);
-      else if (nf === "спб") ok = ok && /(^|[^а-я])спб|питер|санкт|плп|бронка/.test(raw) && !/новорос|нврск|раевск/.test(raw.split(/→|->|—/)[0] || raw);
-      else ok = false;
-    }
-    if (ok) laneHits.push(Object.assign({}, L, {_score: sc.total || sc.toScore, _from:lFrom || nf}));
+  function sameLane(row) {
+    return row.ep.from === nf && row.ep.to === nt;
   }
-  laneHits.sort((a,b) => (b._score||0) - (a._score||0) || (b.n||0) - (a.n||0));
+  function mentionsReturnCity(q, city) {
+    const blob = [q.return_empty, q.conditions, q.quote_raw].join(" ").toLowerCase().replace(/ё/g, "е");
+    if (!/сдач|возврат|порожн/.test(blob)) return false;
+    if (city === "спб") return /спб|питер|петербург/.test(blob);
+    if (city === "новороссийск") return /новороссий|(^|[^а-я])ново([^а-я])/.test(blob);
+    return blob.indexOf(city) >= 0;
+  }
+  function applyReturn(pool) {
+    if (!intent || !pool.length) return pool;
+    if (intent.kind === "drop") {
+      const drops = pool.filter(function (r) { return r.drop; });
+      return drops.length ? drops : pool;
+    }
+    const named = pool.filter(function (r) {
+      return r.variantCity === intent.city || (!r.drop && !r.variants && mentionsReturnCity(r.q, intent.city));
+    });
+    if (named.length) return named;
+    const plain = pool.filter(function (r) { return !r.drop; });
+    return plain.length ? plain : pool;
+  }
+  function keepFresh(pool) {
+    const dates = pool.map(function (r) { return String(r.q.date || ""); }).filter(Boolean).sort();
+    if (!dates.length) return pool;
+    const newest = dates[dates.length - 1];
+    function since(days) {
+      const cut = new Date(newest + "T00:00:00Z");
+      cut.setUTCDate(cut.getUTCDate() - days);
+      const iso = cut.toISOString().slice(0, 10);
+      return pool.filter(function (r) { return String(r.q.date || "") >= iso; });
+    }
+    const recent = since(21);
+    if (recent.length >= 4) return recent;
+    const wider = since(80);
+    if (wider.length >= 3) return wider;
+    return pool;
+  }
+  function takeWeight(pool) {
+    if (weightT == null || !pool.length) return {rows: pool, loose: false};
+    const known = pool.filter(function (r) { return r.weight != null; });
+    if (!known.length) return {rows: pool, loose: true};
+    let hit = [];
+    for (const tol of [1.5, 3, 5]) {
+      hit = known.filter(function (r) { return Math.abs(r.weight - weightT) <= tol; });
+      if (hit.length >= 3) return {rows: hit, loose: tol > 3};
+      if (hit.length >= 2 && tol <= 3) return {rows: hit, loose: false};
+    }
+    known.sort(function (a, b) { return Math.abs(a.weight - weightT) - Math.abs(b.weight - weightT); });
+    return {
+      rows: known.slice(0, Math.min(3, known.length)),
+      loose: Math.abs(known[0].weight - weightT) >= 4
+    };
+  }
+  function dropOutliers(pool) {
+    if (pool.length < 5) return pool;
+    const med = median(pool.map(function (r) { return r.net; }));
+    const kept = pool.filter(function (r) { return r.net >= med * 0.62 && r.net <= med * 1.55; });
+    return kept.length >= 3 ? kept : pool;
+  }
 
-  let pool;
+  let exact = rows.filter(sameLane);
   let reeferKind = "";
   if (ctype === "rf") {
-    /* Слабые совпадения и оценка по км для рефа не используем — цифру не выдумываем. */
-    pool = scored.filter(q => q._score >= 100 && !q._roundtrip && !q._ep.is_empty_only);
-    if (pool.length) reeferKind = "loaded";
-    if (!pool.length) {
-      pool = scored.filter(q => q._score >= 75 && !q._roundtrip && !q._ep.is_empty_only);
-      if (pool.length) reeferKind = "loaded";
-    }
-    if (!pool.length) {
-      pool = scored.filter(q => q._score >= 100 && !q._roundtrip && q._ep.is_empty_only);
-      if (pool.length) reeferKind = "empty";
-    }
-    if (!pool.length) {
-      pool = scored.filter(q => q._score >= 75 && !q._roundtrip && q._ep.is_empty_only);
-      if (pool.length) reeferKind = "empty";
-    }
-  } else {
-    pool = scored.filter(q => q._score >= 100 && !q._roundtrip);
-    if (!pool.length) pool = scored.filter(q => q._score >= 100);
-    if (!pool.length) pool = scored.filter(q => q._score >= 75 && !q._roundtrip);
-    if (!pool.length) pool = scored.filter(q => q._score >= 75);
-    if (!pool.length) pool = scored.filter(q => !q._roundtrip).slice(0, 8);
-    if (!pool.length) pool = scored.slice(0, 8);
-  }
-  /* близкие (регион) — в источники, но не в медиану пары, если уже есть точные */
-  const exactPool = pool.filter(q => q._score >= 100 && !q._roundtrip);
-  const closeExtra = scored.filter(q => q._score >= 75 && q._score < 100 && !q._roundtrip && (ctype !== "rf" || isReeferQuote(q)));
-
-  if (returnEmpty) {
-    const re = normalizePlace(returnEmpty);
-    const filtered = pool.filter(q =>
-      (q.return_empty||"").toLowerCase().includes(re) ||
-      (q.conditions||"").toLowerCase().includes(re) ||
-      (q.quote_raw||"").toLowerCase().includes(re));
-    if (filtered.length) pool = filtered;
-  }
-  if (weightT != null && pool.length > 1) {
-    const pref = pool.filter(q => q.weight_t == null || Math.abs(Number(q.weight_t) - weightT) <= 5);
-    if (pref.length) pool = pref;
+    const loaded = exact.filter(function (r) { return !r.ep.is_empty_only; });
+    reeferKind = loaded.length ? "loaded" : (exact.length ? "empty" : "");
+    if (loaded.length) exact = loaded;
   }
 
-  const pricesSel = pool.map(q => selectedQuotePrice(q, ctype)).filter(Boolean);
-  const prices20 = pool.map(q => positivePrice(q.price_20)).filter(Boolean);
-  const prices40 = pool.map(q => positivePrice(q.price_40)).filter(Boolean);
-  const overweights = pool.map(q => q.overweight).filter(Boolean);
-  const exact = pool.some(q => q._score >= 100 && !q._roundtrip);
-  const similarEnough = pool.length > 0 && pricesSel.length > 0;
+  let mode = exact.length ? "exact" : "";
+  let pool = exact.length ? applyReturn(exact) : [];
+  let looseWeight = false;
+  if (pool.length) {
+    pool = keepFresh(pool);
+    const w = takeWeight(pool);
+    pool = w.rows;
+    looseWeight = w.loose;
+    pool = dropOutliers(pool);
+  }
 
-  let p20 = null;
-  let p40 = null;
-  let primary = null;
-  if (similarEnough) {
-    if (ctype === "20") {
-      p20 = prices20.length ? median(prices20) : null;
-      p40 = prices40.length ? median(prices40) : null;
-      if (p20 && p40 && p20 < p40) p20 = p40;
-      primary = p20;
-    } else if (ctype === "40") {
-      p40 = prices40.length ? median(prices40) : null;
-      primary = p40;
+  if (!pool.length && ctype !== "rf" && rd) {
+    const radius = Math.max(140, Math.min(380, rd.km * 0.26));
+    let close = rows.filter(function (r) {
+      if (r.ep.from !== nf || r.ep.to === nt) return false;
+      const leg = roadKm(r.ep.from, r.ep.to);
+      if (!leg) return false;
+      const ratio = leg.km / rd.km;
+      if (ratio < 0.62 || ratio > 1.45) return false;
+      const destA = resolveCity(r.ep.to);
+      const destB = resolveCity(nt);
+      if (!destA || !destB) return false;
+      const d = haversineKm(destA.coords, destB.coords);
+      return d <= radius && d > 15;
+    });
+    if (close.length) {
+      mode = "close";
+      close = applyReturn(close);
+      close = keepFresh(close);
+      const w = takeWeight(close);
+      close = w.rows;
+      looseWeight = w.loose;
+      pool = close;
+    }
+  }
+
+  function weightSpan(list) {
+    const ws = list.map(function (r) { return r.weight; }).filter(function (v) { return v != null; });
+    if (!ws.length) return "";
+    const mn = Math.min.apply(null, ws);
+    const mx = Math.max.apply(null, ws);
+    const fmt = function (n) { return (Math.round(n * 10) / 10).toString().replace(".", ","); };
+    if (Math.abs(mx - mn) < 0.6) return "около " + fmt(mn) + " т";
+    return fmt(mn) + "–" + fmt(mx) + " т";
+  }
+  function shortRoute(q) {
+    const cut = function (s) { return String(s || "").split(/[,(]/)[0].trim(); };
+    return (cut(q.route_from) || "?") + " → " + (cut(q.route_to) || "?");
+  }
+
+  const prices = pool.map(function (r) { return r.net; }).filter(Boolean);
+  const primary = prices.length ? roundToThousand(median(prices)) : null;
+  const isClose = mode === "close";
+  const exactHit = mode === "exact" && prices.length > 0;
+  const has_proposal = !!primary;
+  let confidence = exactHit ? "точная" : (isClose ? "близкая" : "нет данных");
+  let pairText = primary ? fmtOneRate(primary) : ("нет ставки на " + typeTitle);
+  let warning = "";
+  let method = "";
+  let band = "";
+
+  if (has_proposal) {
+    const mn = roundToThousand(Math.min.apply(null, prices));
+    const mx = roundToThousand(Math.max.apply(null, prices));
+    const span = weightSpan(pool);
+    const bits = [prices.length === 1 ? "1 ставка" : ("медиана по " + prices.length + " ставкам")];
+    if (span) bits.push(span);
+    if (mn && mx && mn !== mx) bits.push(fmtRub(mn) + "–" + fmtRub(mx) + " руб");
+    band = bits.join(" · ");
+    if (exactHit) {
+      method = "Точное совпадение · " + containerTypeLabel(ctype);
+      if (intent && intent.kind === "drop") method += " · со сбросом";
+      else if (intent && intent.kind === "city") {
+        const cityName = intent.city === "спб" ? "СПб" : (intent.city === "новороссийск" ? "Новороссийск" : intent.city);
+        method += " · сдача в " + cityName;
+      }
     } else {
-      primary = median(pricesSel);
+      const counts = {};
+      pool.forEach(function (r) {
+        const key = shortRoute(r.q);
+        counts[key] = (counts[key] || 0) + 1;
+      });
+      const named = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).slice(0, 3)
+        .map(function (k) { return counts[k] > 1 ? (k + " (" + counts[k] + ")") : k; });
+      warning = "Близкие ставки: точного " + String(routeFrom || "").trim() + " → " + String(routeTo || "").trim() + " в базе нет.";
+      method = "Близкие: " + named.join("; ") + (span ? (", " + span) : "") + ".";
+    }
+    if (looseWeight && weightT != null) {
+      const shown = weightSpan(pool) || "другой";
+      warning = (warning ? warning + " " : "") + "В базе вес " + shown + ", в запросе " + weightT + " т — перевес в этих ставках не указан.";
+    }
+    if (ctype === "rf" && (reeferKind === "empty" || (exactHit && pool.every(function (r) { return r.ep.is_empty_only; })))) {
+      warning = "Это ставка на вывоз порожнего реф-контейнера, не на гружёный рейс.";
+      method = "Порожний реф · точное совпадение";
+    }
+  } else if (ctype === "rf") {
+    method = "нет данных по рефу";
+    const unknown = [];
+    if (!resolveCity(nf)) unknown.push(routeFrom || "(откуда)");
+    if (!resolveCity(nt)) unknown.push(routeTo || "(куда)");
+    warning = unknown.length
+      ? ("По этому направлению нет ставки на реф-контейнер. Не знаю город: " + unknown.join(", ") + ".")
+      : "По этому направлению нет ставки на реф-контейнер.";
+  } else {
+    method = "нет данных";
+    const unknown = [];
+    if (!resolveCity(nf)) unknown.push(routeFrom || "(откуда)");
+    if (!resolveCity(nt)) unknown.push(routeTo || "(куда)");
+    if (unknown.length) {
+      warning = "Не знаю координаты: " + unknown.join(", ") + ". Напишите рядом крупный город (Казань, Москва, СПб, Екатеринбург).";
+    } else {
+      warning = "По этому направлению нет цены на " + typeTitle + " и нет близких ставок того же типа.";
     }
   }
 
-  const isEstimate = !exact;
-  let confidence = exact ? "точная" : (pool.some(q=>q._score>=75 && !q._roundtrip) ? "близкая" : (similarEnough ? "частичная" : "нет данных"));
-  let ow = overweights[0] || null;
-  if (!ow) ow = defaultOverweight(weightT, rd && rd.km);
+  let ow = null;
+  const owCounts = {};
+  pool.forEach(function (r) {
+    const s = String(r.q.overweight || "").trim();
+    if (!s) return;
+    owCounts[s] = (owCounts[s] || 0) + 1;
+  });
+  let owBest = "";
+  let owN = 0;
+  Object.keys(owCounts).forEach(function (s) {
+    if (owCounts[s] > owN) { owBest = s; owN = owCounts[s]; }
+  });
+  if (owBest && (owN >= 2 || pool.length <= 3)) ow = owBest;
+  else if (pool.length) ow = "в этих ставках перевес отдельно не указан";
+  else ow = "—";
 
   const extras = [];
   if (secondUnload) extras.push("+5 000 ₽ за 2-ю точку выгрузки (рабочая практика)");
   const variants = [];
-  if (!returnEmpty) variants.push("Дайте два варианта: сдача порожнего в СПб и в Новороссийске — цена сильно отличается.");
-
-  function sourceRow(q, note) {
-    const one = fmtOneRate(selectedQuotePrice(q, ctype));
-    return {
-      date: q.date, source: q.source,
-      route: (q.route_from||"") + " → " + (q.route_to||""),
-      pair: one || fmtPair(q.price_20, q.price_40, false),
-      vat: q.vat, overweight: q.overweight, raw: q.quote_raw,
-      return_empty: q.return_empty, score: q._score,
-      note: note || ""
-    };
+  const altSeen = {};
+  rows.filter(sameLane).forEach(function (r) {
+    (r.variants || []).forEach(function (v) {
+      if (intent && intent.kind === "city" && v.city === intent.city) return;
+      const sum = roundToThousand(variantAmount(v, ctype));
+      if (!sum || (primary && Math.abs(sum - primary) < 1000)) return;
+      const label = v.city === "спб" ? "СПб" : "Новороссийск";
+      const line = "Со сдачей в " + label + ": " + fmtOneRate(sum) + ".";
+      if (!altSeen[line]) { altSeen[line] = 1; variants.push(line); }
+    });
+  });
+  const portLane = nf === "спб" || nf === "новороссийск" || nt === "спб" || nt === "новороссийск";
+  if (!variants.length && !returnEmpty && has_proposal && portLane) {
+    variants.push("Дайте два варианта: сдача порожнего в СПб и в Новороссийске — цена сильно отличается.");
   }
-  const sources = pool.slice(0,8).map(q => sourceRow(q,
-    (q._ep && q._ep.is_empty_only) ? "порожний реф" :
-    (q._roundtrip ? "кругорейс (выгрузка не в конечном пункте сдачи)" : "")
-  ));
-  if (exactPool.length && closeExtra.length && ctype !== "rf") {
-    for (const q of closeExtra.slice(0, 4)) {
-      sources.push(sourceRow(q, "близкий регион (не в расчёте пары)"));
-    }
-  }
-
-  let pairText, warning, method, distInfo = null, has_proposal = false;
-  const typeTitle = containerTypeTitle(ctype);
-
-  if (similarEnough && primary) {
-    pairText = fmtOneRate(primary);
-    if (ctype === "rf" && reeferKind === "empty") {
-      warning = "Это ставка на вывоз порожнего реф-контейнера, не на гружёный рейс.";
-      method = exact ? "порожний реф: точное совпадение в вашей базе" : "порожний реф: близкие маршруты из вашей базы";
-    } else if (ctype === "rf") {
-      warning = isEstimate ? " Точного совпадения маршрута по рефу нет — ориентир по близким реф-ставкам." : "";
-      method = exact ? "точные совпадения по реф-контейнеру" : "близкие маршруты по реф-контейнеру";
-    } else {
-      warning = isEstimate ? " Точного совпадения маршрута в базе нет — ориентир по близким." : "";
-      method = exact ? "точные совпадения в вашей базе" : "близкие маршруты из вашей базы";
-    }
-    has_proposal = true;
-  } else if (ctype === "rf") {
-    /* Реф не оцениваем по сухим ставкам и не по километражу. */
-    pairText = "нет ставки на реф-контейнер";
-    method = "нет данных по рефу";
-    confidence = "нет данных";
-    const cityProbe = estimateByDistance(nf, nt, weightT);
-    distInfo = (cityProbe && !cityProbe.ok) ? cityProbe : null;
-    const unknown = distInfo && distInfo.unknown && distInfo.unknown.length;
-    warning = unknown
-      ? ("По этому направлению в базе нет ставки на реф-контейнер — цифру не предлагаю. " + (distInfo.message || ""))
-      : "По этому направлению в базе нет надёжной ставки на реф-контейнер (реф, RF, 40RF, порожний реф). Оценку по километражу для рефа не подставляю — цифру не предлагаю.";
-    has_proposal = false;
-  } else {
-    /* Оценка по расстоянию — только для выбранного сухого типа, из уже посчитанных price_20 / price_40. */
-    distInfo = estimateByDistance(nf, nt, weightT);
-    const picked = distInfo.ok ? (ctype === "40" ? distInfo.price_40 : distInfo.price_20) : null;
-    if (distInfo.ok && picked) {
-      primary = picked;
-      if (ctype === "40") p40 = picked;
-      else p20 = picked;
-      pairText = fmtOneRate(primary);
-      method = "";
-      confidence = "ориентир";
-      warning = "";
-      has_proposal = true;
-      for (const a of distInfo.analogs) {
-        sources.push({
-          date: a.q.date, source: a.q.source,
-          route: (a.q.route_from||"") + " → " + (a.q.route_to||""),
-          pair: a.pair, vat: a.q.vat, overweight: a.q.overweight,
-          raw: a.q.quote_raw, return_empty: a.q.return_empty, score: null,
-          note: "аналог ≈" + Math.round(a.km) + " км (Δ " + Math.round(a.dKm) + " км)"
-        });
+  if (!intent && exactHit) {
+    const drops = pool.filter(function (r) { return r.drop; });
+    const plain = pool.filter(function (r) { return !r.drop; });
+    if (drops.length >= 3 && plain.length >= 3) {
+      const dMed = roundToThousand(median(drops.map(function (r) { return r.net; })));
+      const pMed = roundToThousand(median(plain.map(function (r) { return r.net; })));
+      if (dMed && pMed && Math.abs(dMed - pMed) / pMed >= 0.08) {
+        variants.unshift("Со сбросом: " + fmtOneRate(dMed) + " (" + drops.length + "). Без сброса: " + fmtOneRate(pMed) + " (" + plain.length + ").");
       }
-    } else {
-      pairText = "нет ставки на " + typeTitle;
-      method = "нет данных";
-      confidence = "нет данных";
-      warning = (distInfo && !distInfo.ok && distInfo.message)
-        ? distInfo.message
-        : ("По этому направлению нет цены на " + typeTitle + " — цифру не предлагаю.");
-      has_proposal = false;
     }
   }
 
-  const laneUse = laneHits.filter(L => {
+  const sources = pool.slice().sort(function (a, b) {
+    return String(b.q.date || "").localeCompare(String(a.q.date || ""));
+  }).slice(0, 8).map(function (r) {
+    return {
+      date: r.q.date,
+      source: r.q.source,
+      route: (r.q.route_from || "") + " → " + (r.q.route_to || ""),
+      pair: fmtOneRate(r.net),
+      vat: r.q.vat,
+      overweight: r.q.overweight,
+      raw: r.q.quote_raw,
+      return_empty: r.q.return_empty,
+      score: exactHit ? 100 : null,
+      note: isClose ? "близкие" : (r.drop ? "со сбросом" : "")
+    };
+  });
+
+  const laneSource = (typeof BASE_LANES !== "undefined" && Array.isArray(BASE_LANES)) ? BASE_LANES : [];
+  const laneHits = [];
+  for (const L of laneSource) {
+    const lFrom = inferLaneOrigin(L);
+    const lTo = canonPlace(L.route_to || "");
+    const sc = scoreMatch(nf, nt, lFrom, lTo);
+    let ok = sc.toScore >= 25;
+    if (lFrom) ok = ok && sc.fromScore >= 25;
+    else {
+      const raw = String(L.sample_raw || "").toLowerCase().replace(/ё/g, "е");
+      if (nf === "новороссийск") ok = ok && /новорос|ново\s*-|ново\s|нврск|нврс|раевск|терминал ново|нутеп|нмтп/.test(raw);
+      else if (nf === "спб") ok = ok && /(^|[^а-я])спб|питер|санкт|плп|бронка|пкт|шушар|ктсп/.test(raw) && !/новорос|нврск|раевск|нутеп/.test((raw.split(/→|->|—/)[0] || raw));
+      else ok = false;
+    }
+    if (ok) laneHits.push(Object.assign({}, L, {_score: sc.total || sc.toScore, _from: lFrom || nf}));
+  }
+  laneHits.sort(function (a, b) { return (b._score || 0) - (a._score || 0) || (b.n || 0) - (a.n || 0); });
+  const carrier_lanes = laneHits.filter(function (L) {
     const reef = isReeferQuote({
       container: L.container, cont_norm: "", cargo: "", conditions: "", quote_raw: L.sample_raw || ""
     });
     return ctype === "rf" ? reef : !reef;
+  }).slice(0, 5).map(function (L) {
+    return {
+      route: (L._from || L.route_from || "?") + " → " + (L.route_to || ""),
+      container: L.container,
+      weight_band: L.weight_band,
+      n: L.n,
+      min: L.min_price,
+      median: L.median_price,
+      max: L.max_price,
+      dates: (L.date_from || "") + "…" + (L.date_to || "")
+    };
   });
-  const carrier_lanes = laneUse.slice(0,5).map(L => ({
-    route: (L._from || L.route_from || "?") + " → " + (L.route_to||""),
-    container: L.container, weight_band: L.weight_band, n: L.n,
-    min: L.min_price, median: L.median_price, max: L.max_price,
-    dates: (L.date_from||"") + "…" + (L.date_to||"")
-  }));
-
   let market_median_note = null;
   if (carrier_lanes.length) {
-    let meds = carrier_lanes.filter(L => (L.n||0) >= 2).map(L => L.median).filter(Boolean);
-    if (!meds.length) meds = carrier_lanes.map(L => L.median).filter(Boolean);
+    let meds = carrier_lanes.filter(function (L) { return (L.n || 0) >= 2; }).map(function (L) { return L.median; }).filter(Boolean);
+    if (!meds.length) meds = carrier_lanes.map(function (L) { return L.median; }).filter(Boolean);
     if (meds.length) market_median_note = median(meds);
   }
 
+  let unknown_city = null;
+  if (!has_proposal) {
+    const unknown = [];
+    if (!resolveCity(nf)) unknown.push(routeFrom || "(откуда)");
+    if (!resolveCity(nt)) unknown.push(routeTo || "(куда)");
+    if (unknown.length) unknown_city = unknown;
+  }
+
   return {
-    pair_text: pairText, price: primary,
+    pair_text: pairText,
+    price: primary,
     price_20: ctype === "20" ? primary : null,
     price_40: (ctype === "40" || ctype === "rf") ? primary : null,
     container_type: ctype,
     container_label: containerTypeLabel(ctype),
     container_title: typeTitle,
     vat: "+5% НДС",
-    overweight: ow || "—", confidence, is_estimate: isEstimate || !exact,
-    extras, variants_note: variants, sources,
-    carrier_lanes, market_median_note,
-    warning, has_proposal, method,
-    distance_km: rd ? Math.round(rd.km) : (distInfo && distInfo.ok ? distInfo.km : null) || null,
-    dist_info: distInfo && distInfo.ok ? distInfo : null,
-    unknown_city: distInfo && !distInfo.ok ? distInfo.unknown : null
+    overweight: ow || "—",
+    confidence: confidence,
+    is_estimate: !exactHit,
+    extras: extras,
+    variants_note: variants,
+    sources: sources,
+    carrier_lanes: carrier_lanes,
+    market_median_note: market_median_note,
+    warning: warning,
+    has_proposal: has_proposal,
+    method: method,
+    band_text: band,
+    distance_km: rd ? Math.round(rd.km) : null,
+    dist_info: null,
+    unknown_city: unknown_city
   };
 }
+
 function renderStavki() {
   return `<h1>Калькулятор ставок</h1>
-  <div class="warn-box">Подбор ставки по вашей базе и оценке по расстоянию. Сумма — в рублях, для выбранного типа контейнера.</div>
+  <div class="warn-box">Подбор по базе ставок: маршрут, тип контейнера, вес и сдача порожнего. Сумма — в рублях, для выбранного типа.</div>
   <div class="card">
     <div class="row">
       <div class="field"><label>Откуда</label><input id="s-from" placeholder="СПб"></div>
@@ -1587,8 +1847,9 @@ function showStavkiResult() {
   const r = suggestRate(from, to, w, ret, su, ctype);
   let html = `<div class="card"><h2>Предложение · ${esc(r.container_title || containerTypeTitle(ctype))}</h2>`;
   if (r.has_proposal) {
-    html += `<div class="pair">${esc(r.pair_text)} <span class="chip">${esc(r.container_label || "")}</span> <span style="font-size:1rem;font-weight:600">${esc(r.vat)}</span></div>
-      <p>Перевес: <strong>${esc(r.overweight)}</strong> · Уверенность: <span class="chip ${r.is_estimate?"warn":""}">${esc(r.confidence)}</span>
+    html += `<div class="pair">${esc(r.pair_text)} <span class="chip">${esc(r.container_label || "")}</span> <span style="font-size:1rem;font-weight:600">${esc(r.vat)}</span></div>`;
+    if (r.band_text) html += `<p class="muted">${esc(r.band_text)}</p>`;
+    html += `<p>Перевес: <strong>${esc(r.overweight)}</strong> · Уверенность: <span class="chip ${r.is_estimate?"warn":""}">${esc(r.confidence)}</span>
       ${r.distance_km?` · ${r.distance_km} км`:""}</p>`;
     if (r.method && !/оценк|a \+|₽\/км|\bn=/.test(r.method)) html += `<p class="muted">${esc(r.method)}</p>`;
   } else {
