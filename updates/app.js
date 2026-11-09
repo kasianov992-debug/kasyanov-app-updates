@@ -559,6 +559,9 @@ document.getElementById("nav").addEventListener("click", (e) => {
 function showTab(tab, opts) {
   opts = opts || {};
   try { if (window.ensureGrailNavButton) window.ensureGrailNavButton(); } catch (e) {}
+  if (currentTab === "rolis" && tab !== "rolis") {
+    try { if (typeof captureRolisLifeUi === "function") captureRolisLifeUi(); } catch (e) {}
+  }
   // Leaving an open заявка form?
   const leavingForm = zayavkaFormBaseline != null && !(tab === "zayavki" && (opts.mode === "new" || opts.mode === "edit"));
   if (leavingForm) {
@@ -577,6 +580,10 @@ function showTab(tab, opts) {
   }
   if (tab === "home") tab = "pochta"; // вкладка «Главное» удалена
   currentTab = tab;
+  if (tab !== "rolis" && window.__rolisLifeTimer) {
+    clearInterval(window.__rolisLifeTimer);
+    window.__rolisLifeTimer = null;
+  }
   document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   updateHomeTabBadge();
   try { if (typeof updateChatTabBadge === "function") updateChatTabBadge(); } catch (e) {}
@@ -2709,6 +2716,9 @@ function importBackup(file) {
       if (!DB.quotes_extra) DB.quotes_extra = [];
       if (!DB.next) DB.next = {carrier:100,driver:100,truck:100,zayavka:100,trip:100,quote:100};
       if (!DB.imports_done) DB.imports_done = [];
+      if (!DB.rolis || typeof DB.rolis !== "object") DB.rolis = { byKey: {}, cards: [] };
+      if (!DB.rolis.byKey || typeof DB.rolis.byKey !== "object") DB.rolis.byKey = {};
+      if (!Array.isArray(DB.rolis.cards)) DB.rolis.cards = [];
       saveStore(DB); applyVersionedImports(); toast("Копия загружена"); showTab("pochta");
     } catch (e) { alert("Не удалось прочитать файл: " + e.message); }
   };
@@ -2909,7 +2919,7 @@ window.addEventListener("hashchange", () => {
 });
 /* boot deferred to bootCloudAuth() in 1.0.7 */
 
-/* === РОЛИС (вкладка Магистраль 1.1.0) === */
+/* === РОЛИС (вкладка Магистраль 1.1.0, карточка контейнера 1.2.0) === */
 const ROLIS_LOGIN_URL = "https://www.rlisystems.ru/webiom/login.jsf";
 const ROLIS_SERVICE_URL = "https://www.rlisystems.ru/service/";
 const ROLIS_STATUS_SUGGESTIONS = [
@@ -2934,9 +2944,26 @@ const ROLIS_TERMINALS = [
   "ПКТ", "Петролеспорт", "УЛКТ", "НУТЭП", "Янино",
   "Нева-Металл", "Логистика-Терминал", "Терминал Врангель"
 ];
+const ROLIS_LIFE_STAGES = [
+  { id: "port", title: "В порту" },
+  { id: "pickup", title: "Вывоз" },
+  { id: "handling", title: "Обработка" },
+  { id: "return", title: "Возврат порожнего" },
+  { id: "closed", title: "Закрыт" }
+];
+const ROLIS_HANDLING_TYPES = ["перетарка", "выгрузка", "затарка"];
+const ROLIS_CONT_TYPES = [
+  { id: "20", label: "20′" },
+  { id: "40", label: "40′" },
+  { id: "40hc", label: "40HC" },
+  { id: "rf", label: "реф" }
+];
+/** Unlocked cards advance one stage this often while DEMO is the active mode. */
+const ROLIS_DEMO_STEP_MS = 30000;
 function ensureRolisStore() {
   if (!DB.rolis || typeof DB.rolis !== "object") DB.rolis = {};
   if (!DB.rolis.byKey || typeof DB.rolis.byKey !== "object") DB.rolis.byKey = {};
+  if (!Array.isArray(DB.rolis.cards)) DB.rolis.cards = [];
   return DB.rolis;
 }
 
@@ -2962,7 +2989,7 @@ function guessShippingLine(container, cargo) {
     ARKU: "Arkas", FYCU: "FESCO", TRHU: "Triton", AXIU: "Axis",
     TCLU: "Textainer", DFSU: "Dong Fang", TCNU: "Textainer",
     MSKU: "Maersk", CMAU: "CMA CGM", HLCU: "Hapag-Lloyd",
-    OOLU: "OOCL", SEGU: "Sea", BSIU: "Blue Sky", DRYU: "Dong Young"
+    MSCU: "MSC", OOLU: "OOCL", SEGU: "Sea", BSIU: "Blue Sky", DRYU: "Dong Young"
   };
   if (map[pref]) return map[pref];
   const c = String(cargo || "");
@@ -3159,6 +3186,787 @@ async function copyTextRolis(text, okMsg) {
   }
 }
 
+
+function rolisDemoEnabled() {
+  if (window.__rolisDemoOn == null) window.__rolisDemoOn = true;
+  return !!window.__rolisDemoOn;
+}
+function clampStage(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x) || x <= 0) return 0;
+  if (x >= ROLIS_LIFE_STAGES.length - 1) return ROLIS_LIFE_STAGES.length - 1;
+  return Math.round(x);
+}
+function rolisStageIndex(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return clampStage(value);
+  const s = String(value == null ? "" : value).trim().toLowerCase().replace(/ё/g, "е");
+  const aliases = {
+    "0": 0, "port": 0, "в порту": 0,
+    "1": 1, "pickup": 1, "вывоз": 1,
+    "2": 2, "handling": 2, "обработка": 2,
+    "3": 3, "return": 3, "возврат": 3, "возврат порожнего": 3,
+    "4": 4, "closed": 4, "закрыт": 4
+  };
+  if (Object.prototype.hasOwnProperty.call(aliases, s)) return aliases[s];
+  return -1;
+}
+function newLifeId() {
+  return "lc" + Date.now().toString(36) + Math.floor(Math.random() * 1000000).toString(36);
+}
+function rolisNormCont(s) {
+  return String(s || "").toUpperCase().replace(/\s+/g, "").slice(0, 16);
+}
+function toIsoDate(v) {
+  const s = String(v || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const m = s.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+  if (m) return m[3] + "-" + m[2] + "-" + m[1];
+  return "";
+}
+function parseIsoDateLocal(s) {
+  const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  if (d.getFullYear() !== Number(m[1]) || d.getMonth() !== Number(m[2]) - 1) return null;
+  return d;
+}
+function parseNonNegInt(s) {
+  const t = String(s == null ? "" : s).trim().replace(/\s/g, "").replace(",", ".");
+  if (!t) return { ok: true, value: "" };
+  if (!/^\d+(\.0+)?$/.test(t)) return { ok: false, value: "" };
+  return { ok: true, value: Math.round(Number(t)) };
+}
+function parseCostInput(s) {
+  const t = String(s == null ? "" : s).replace(/₽/g, "").replace(/\s/g, "").replace(",", ".").trim();
+  if (!t) return { ok: true, value: "" };
+  if (!/^\d+(\.\d+)?$/.test(t)) return { ok: false, value: "" };
+  const n = Math.round(Number(t));
+  if (!Number.isFinite(n) || n < 0) return { ok: false, value: "" };
+  return { ok: true, value: n };
+}
+function formatRubles(n) {
+  if (n == null || n === "") return "—";
+  const v = Number(String(n).replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(v)) return "—";
+  const sign = v < 0 ? "−" : "";
+  const body = String(Math.abs(Math.round(v))).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return sign + body + " ₽";
+}
+function formatKg(v) {
+  const t = String(v == null ? "" : v).trim();
+  if (!t) return "";
+  const n = Number(t.replace(/\s/g, "").replace(",", "."));
+  if (!Number.isFinite(n)) return t;
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " кг";
+}
+function ruDays(n) {
+  const a = Math.abs(Math.round(Number(n) || 0));
+  const m10 = a % 10, m100 = a % 100;
+  let w = "дней";
+  if (m100 < 11 || m100 > 14) {
+    if (m10 === 1) w = "день";
+    else if (m10 >= 2 && m10 <= 4) w = "дня";
+  }
+  return a + " " + w;
+}
+function dueText(label, days) {
+  if (days > 0) return label + ": осталось " + ruDays(days);
+  if (days === 0) return label + ": последний день";
+  return label + ": просрочено " + ruDays(days);
+}
+function guessContTypeFromText(text) {
+  const s = String(text || "").toLowerCase().replace(/ё/g, "е");
+  if (/реф|reefer|\brf\b|40\s*rh|40rh/.test(s)) return "rf";
+  if (/40\s*h\s*c|40hc|high\s*cube|хай\s*кьюб/.test(s)) return "40hc";
+  if (/(^|[^0-9])40([^0-9]|$)|40['′]|40фт|40dc|40dv/.test(s)) return "40";
+  if (/(^|[^0-9])20([^0-9]|$)|20['′]|20фт|20dc|20dv/.test(s)) return "20";
+  return "";
+}
+function guessHsCode(text) {
+  const s = String(text || "");
+  const m = s.match(/ТН\s*ВЭД[^0-9]{0,16}(\d[\d\s]{3,18}\d)/i) || s.match(/\b(?:HS|ТНВЭД)\s*[:№\-]?\s*(\d{4,10})\b/i);
+  if (!m) return "";
+  return m[1].replace(/\s+/g, "").slice(0, 10);
+}
+function rolisContTypeLabel(id) {
+  const t = ROLIS_CONT_TYPES.find(x => x.id === id);
+  return t ? t.label : "";
+}
+function emptyLifeCard() {
+  return {
+    id: "", container: "", line: "", terminal: "", arrival_date: "", free_days: "",
+    truck: "", driver: "", pickup_date: "", handling_type: "", warehouse: "", handling_date: "",
+    return_terminal: "", return_deadline: "", return_date: "",
+    stage: 0, stage_locked: false, assignee: "", cost: "",
+    cargo: "", weight_kg: "", hs_code: "", cont_type: "",
+    zayavka_id: null, created_at: "", updated_at: "", demo_anchor: ""
+  };
+}
+function rolisCards() {
+  return ensureRolisStore().cards.filter(c => c && typeof c === "object");
+}
+function findLifeCard(id) {
+  const key = String(id || "");
+  return rolisCards().find(c => String(c.id) === key) || null;
+}
+function currentLifeFilter() {
+  const f = String(window.__rolisLifeFilter || "");
+  return ROLIS_LIFE_STAGES.some(s => s.id === f) ? f : "";
+}
+function lifeField(v) {
+  return v == null ? "" : String(v);
+}
+function rolisDemoElapsed(card) {
+  const anchor = Date.parse((card && (card.demo_anchor || card.created_at)) || "") || Date.now();
+  const nudge = (window.__rolisDemoNudge && card && window.__rolisDemoNudge[card.id]) || 0;
+  return Date.now() + nudge - anchor;
+}
+function rolisDemoStageIndex(card) {
+  const base = clampStage(card && card.stage);
+  const elapsed = rolisDemoElapsed(card);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return base;
+  return clampStage(base + Math.floor(elapsed / ROLIS_DEMO_STEP_MS));
+}
+function rolisCardView(card) {
+  card = card || {};
+  const saved = clampStage(card.stage);
+  const locked = !!card.stage_locked;
+  const demoOn = rolisDemoEnabled();
+  let index = saved;
+  let mode = locked ? "manual" : "saved";
+  if (!locked && demoOn) {
+    const svc = window.__rolisServiceStage && window.__rolisServiceStage[card.id];
+    if (svc && svc.stage != null && svc.stage >= 0) {
+      index = clampStage(svc.stage);
+      mode = "service";
+    } else {
+      index = rolisDemoStageIndex(card);
+      mode = "demo";
+    }
+  }
+  const stage = ROLIS_LIFE_STAGES[index] || ROLIS_LIFE_STAGES[0];
+  let eta = "";
+  if (mode === "manual") eta = "Стадия зафиксирована вручную";
+  else if (mode === "service") eta = "Стадия из веб-сервиса РОЛИС";
+  else if (mode === "demo") {
+    if (index >= ROLIS_LIFE_STAGES.length - 1) eta = "ДЕМО · стадия «Закрыт»";
+    else {
+      const elapsed = rolisDemoElapsed(card);
+      const into = ((elapsed % ROLIS_DEMO_STEP_MS) + ROLIS_DEMO_STEP_MS) % ROLIS_DEMO_STEP_MS;
+      const left = Math.max(1, Math.ceil((ROLIS_DEMO_STEP_MS - into) / 1000));
+      eta = "ДЕМО · следующая стадия через " + left + " с";
+    }
+  } else if (!demoOn) eta = "Демо выключено — показана сохранённая стадия";
+  return { index: index, mode: mode, title: stage.title, id: stage.id, eta: eta };
+}
+function lifeDeadlineInfo(card) {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const out = [];
+  const arrival = parseIsoDateLocal(card && card.arrival_date);
+  if (arrival && card.free_days !== "" && card.free_days != null && Number.isFinite(Number(card.free_days))) {
+    const end = new Date(arrival.getTime());
+    end.setDate(end.getDate() + Number(card.free_days));
+    out.push({ key: "storage", label: "Хранение", days: Math.round((end.getTime() - start.getTime()) / 86400000) });
+  }
+  const ret = parseIsoDateLocal(card && card.return_deadline);
+  if (ret) {
+    out.push({ key: "return", label: "Возврат", days: Math.round((ret.getTime() - start.getTime()) / 86400000) });
+  }
+  return out;
+}
+function lifeAlertClass(card, view) {
+  if (!view || view.index === 4) return "";
+  const dues = lifeDeadlineInfo(card);
+  let soon = false;
+  for (const d of dues) {
+    if (d.days < 0) return "is-overdue";
+    if (d.days <= 2) soon = true;
+  }
+  return soon ? "is-soon" : "";
+}
+function dueClass(days, muted) {
+  if (muted) return "rolis-due is-muted";
+  if (days < 0) return "rolis-due is-bad";
+  if (days <= 2) return "rolis-due is-soon";
+  return "rolis-due";
+}
+function lifeNowLine(card, view) {
+  if (!view || view.index === 4) return "";
+  if (view.index === 0) {
+    return [card.terminal, card.arrival_date ? ("прибытие " + fmtDate(card.arrival_date)) : "", (card.free_days !== "" && card.free_days != null) ? ("свободно " + card.free_days + " дн.") : ""].filter(Boolean).join(" · ");
+  }
+  if (view.index === 1) {
+    return [card.truck, card.driver, card.pickup_date ? fmtDate(card.pickup_date) : ""].filter(Boolean).join(" · ");
+  }
+  if (view.index === 2) {
+    return [card.handling_type, card.warehouse, card.handling_date ? fmtDate(card.handling_date) : ""].filter(Boolean).join(" · ");
+  }
+  return [card.return_terminal, card.return_deadline ? ("срок " + fmtDate(card.return_deadline)) : "", card.return_date ? ("факт " + fmtDate(card.return_date)) : ""].filter(Boolean).join(" · ");
+}
+function lifeMatchesQuery(card, q) {
+  const raw = String(q || "").trim();
+  if (!raw) return true;
+  const n = normName(raw);
+  if (normName(card.cargo || "").indexOf(n) >= 0) return true;
+  const cont = rolisNormCont(card.container).toLowerCase();
+  const compact = n.replace(/\s+/g, "");
+  return !!(compact && cont.indexOf(compact) >= 0);
+}
+function cardFromRolisRow(row) {
+  const z = (DB.zayavki || []).find(x => x && x.id === row.zayavkaId) || {};
+  const carrierName = (z.carrier && z.carrier.full_name) || "";
+  const cargo = String(z.cargo || row.cargo || "").trim();
+  const now = new Date().toISOString();
+  const driver = row.driver && row.driver !== "—" ? row.driver : "";
+  const truck = row.tractor && row.tractor !== "—" ? row.tractor : "";
+  const terminal = row.terminal && row.terminal !== "—" ? row.terminal : "";
+  const card = emptyLifeCard();
+  card.container = rolisNormCont(row.container);
+  card.line = row.line && row.line !== "—" ? row.line : "";
+  card.terminal = terminal;
+  card.arrival_date = toIsoDate(z.date || row.date);
+  card.truck = truck;
+  card.driver = driver;
+  card.warehouse = String(z.unloading_address || "").trim();
+  card.return_terminal = terminal;
+  card.assignee = carrierName || driver;
+  card.cargo = cargo;
+  card.weight_kg = String(z.weight_kg == null ? "" : z.weight_kg).trim();
+  card.hs_code = guessHsCode(cargo);
+  card.cont_type = guessContTypeFromText(cargo);
+  card.zayavka_id = row.zayavkaId != null ? row.zayavkaId : null;
+  card.created_at = now;
+  card.updated_at = now;
+  card.demo_anchor = now;
+  return card;
+}
+function renderLifeSteps(current) {
+  return ROLIS_LIFE_STAGES.map((s, i) => {
+    const cls = i < current ? "is-done" : (i === current ? "is-current" : "");
+    const aria = i === current ? ` aria-current="step"` : "";
+    return `<li class="${cls}"${aria}>${esc(s.title)}</li>`;
+  }).join("");
+}
+function renderLifeCard(card) {
+  const view = rolisCardView(card);
+  const alert = lifeAlertClass(card, view);
+  const closed = view.index === 4;
+  const dues = lifeDeadlineInfo(card);
+  let dueHtml = "";
+  if (!dues.length) {
+    dueHtml = `<span class="rolis-due is-muted">Сроки сверхнорматива не заданы</span>`;
+  } else {
+    for (const d of dues) {
+      const tip = d.key === "storage"
+        ? "Сверхнорматив хранения: дата прибытия плюс свободные дни"
+        : "Сверхнорматив возврата порожнего: срок возврата";
+      dueHtml += `<span class="${dueClass(d.days, closed)}" title="${esc(tip)}">${esc(dueText(d.label, d.days))}</span> `;
+    }
+  }
+  const typeLabel = rolisContTypeLabel(card.cont_type);
+  const cargo = String(card.cargo || "").trim();
+  const weight = formatKg(card.weight_kg);
+  const hs = String(card.hs_code || "").trim();
+  const bits = [];
+  if (weight) bits.push(weight);
+  if (hs) bits.push("ТН ВЭД " + hs);
+  const tag = view.mode === "demo"
+    ? `<span class="rolis-demo-tag">ДЕМО</span>`
+    : (view.mode === "manual" ? `<span class="rolis-chip">вручную</span>` : (view.mode === "service" ? `<span class="rolis-chip">РОЛИС</span>` : ""));
+  const resume = (view.mode === "manual" && rolisDemoEnabled())
+    ? `<button type="button" class="btn small ghost" data-life-act="demo" data-life-id="${esc(card.id)}">Снова демо</button>`
+    : "";
+  const nowLine = lifeNowLine(card, view);
+  return `<article class="rolis-life-card ${alert}" data-life-id="${esc(card.id)}" data-stage-now="${view.index}" data-stage-mode="${esc(view.mode)}">
+    <div class="rolis-life-head">
+      <div class="rolis-life-title"><span class="mono">${card.container ? esc(card.container) : "без номера"}</span>${typeLabel ? ` <span class="rolis-chip">${esc(typeLabel)}</span>` : ""} ${tag}</div>
+      <div class="rolis-muted">${card.line ? esc(card.line) : ""}</div>
+    </div>
+    <div class="rolis-life-cargo"><strong>Груз:</strong> ${cargo ? `<span class="rolis-cargo-name">${esc(cargo)}</span>` : `<span class="rolis-muted">не указан</span>`}</div>
+    ${bits.length ? `<div class="rolis-sub">${esc(bits.join(" · "))}</div>` : ""}
+    <ol class="rolis-steps">${renderLifeSteps(view.index)}</ol>
+    <div class="rolis-life-meta">
+      <span>Везёт: <strong>${card.assignee ? esc(card.assignee) : "не указано"}</strong></span>
+      <span>Стоимость: <strong>${esc(formatRubles(card.cost))}</strong></span>
+    </div>
+    <div class="rolis-life-dues">${dueHtml}</div>
+    <div class="rolis-sub">Сейчас: ${esc(view.title)}${nowLine ? " · " + esc(nowLine) : ""}</div>
+    <div class="rolis-sub" data-life-eta>${esc(view.eta)}</div>
+    <div class="rolis-life-actions">
+      <button type="button" class="btn small" data-life-act="edit" data-life-id="${esc(card.id)}">Изменить</button>
+      <button type="button" class="btn small secondary" data-life-act="prev" data-life-id="${esc(card.id)}" ${view.index === 0 ? "disabled" : ""}>Назад</button>
+      <button type="button" class="btn small" data-life-act="next" data-life-id="${esc(card.id)}" ${view.index === 4 ? "disabled" : ""}>Дальше</button>
+      ${resume}
+      <button type="button" class="btn small ghost" data-life-act="del" data-life-id="${esc(card.id)}" style="color:#b91c1c!important">Удалить</button>
+    </div>
+  </article>`;
+}
+function renderRolisLifeCards() {
+  const q = window.__rolisLifeQ || "";
+  const filter = currentLifeFilter();
+  const all = rolisCards().filter(c => c.id).slice().sort((a, b) => String(b.updated_at || b.created_at || "").localeCompare(String(a.updated_at || a.created_at || "")));
+  if (!all.length) return `<p class="rolis-muted">Нет карточек. Создайте новую или заполните из заявки.</p>`;
+  const shown = all.filter(c => lifeMatchesQuery(c, q) && (!filter || rolisCardView(c).id === filter));
+  if (!shown.length) return `<p class="rolis-muted">Ничего не найдено. Смените стадию или поиск.</p>`;
+  return shown.map(renderLifeCard).join("");
+}
+function lifeSelectOptions(list, current, placeholder) {
+  let html = `<option value="">${esc(placeholder || "—")}</option>`;
+  const cur = String(current || "");
+  let seen = !cur;
+  for (const item of list) {
+    const id = typeof item === "string" ? item : item.id;
+    const label = typeof item === "string" ? item : item.label;
+    if (id === cur) seen = true;
+    html += `<option value="${esc(id)}" ${id === cur ? "selected" : ""}>${esc(label)}</option>`;
+  }
+  if (cur && !seen) html += `<option value="${esc(cur)}" selected>${esc(cur)}</option>`;
+  return html;
+}
+function renderLifePrefillOptions() {
+  const rows = buildRolisRows();
+  let html = `<option value="">— контейнер из заявки —</option>`;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const cargo = String(r.cargo || "").replace(/\s+/g, " ").trim();
+    const short = cargo.length > 42 ? cargo.slice(0, 42) + "…" : cargo;
+    const label = (r.container || "без номера") + (short ? " · " + short : "") + (r.zayavkaNumber ? " · заявка " + r.zayavkaNumber : "");
+    html += `<option value="${i}">${esc(label)}</option>`;
+  }
+  return html;
+}
+function renderLifeForm() {
+  const mode = window.__rolisLifeEdit;
+  if (!mode) return "";
+  const src = Object.assign(emptyLifeCard(), window.__rolisLifeDraft || {});
+  const isNew = mode === "new" || !src.id;
+  const stageOpts = ROLIS_LIFE_STAGES.map((s, i) => `<option value="${i}" ${Number(src.stage) === i ? "selected" : ""}>${esc(s.title)}</option>`).join("");
+  return `<div class="rolis-life-form" id="rolis-life-form">
+    <h3>${isNew ? "Новая карточка" : "Изменить карточку"}</h3>
+    <input type="hidden" id="rolis-f-id" value="${esc(src.id)}">
+    <input type="hidden" id="rolis-f-zayavka" value="${src.zayavka_id == null ? "" : esc(src.zayavka_id)}">
+    <h3>Груз</h3>
+    <div class="row">
+      <div class="field wide"><label for="rolis-f-cargo">Груз</label><textarea id="rolis-f-cargo" placeholder="Наименование, описание">${esc(src.cargo)}</textarea></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="rolis-f-weight">Вес, кг</label><input id="rolis-f-weight" inputmode="decimal" value="${esc(lifeField(src.weight_kg))}" placeholder="18000"></div>
+      <div class="field"><label for="rolis-f-hs">Код ТН ВЭД</label><input id="rolis-f-hs" value="${esc(src.hs_code)}" placeholder="необязательно"></div>
+      <div class="field"><label for="rolis-f-type">Тип контейнера</label><select id="rolis-f-type">${lifeSelectOptions(ROLIS_CONT_TYPES, src.cont_type, "—")}</select></div>
+    </div>
+    <h3>1. В порту</h3>
+    <div class="row">
+      <div class="field"><label for="rolis-f-container">Номер контейнера</label><input id="rolis-f-container" class="mono" value="${esc(src.container)}" placeholder="MSKU1234567" autocapitalize="characters"></div>
+      <div class="field"><label for="rolis-f-line">Линия</label><input id="rolis-f-line" value="${esc(src.line)}" placeholder="Maersk"></div>
+      <div class="field"><label for="rolis-f-terminal">Терминал / порт</label><input id="rolis-f-terminal" value="${esc(src.terminal)}" placeholder="ПКТ"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label for="rolis-f-arrival">Дата прибытия</label><input type="date" id="rolis-f-arrival" value="${esc(toIsoDate(src.arrival_date))}"></div>
+      <div class="field"><label for="rolis-f-free">Свободные дни</label><input id="rolis-f-free" inputmode="numeric" value="${esc(lifeField(src.free_days))}" placeholder="5"></div>
+    </div>
+    <h3>2. Вывоз</h3>
+    <div class="row">
+      <div class="field"><label for="rolis-f-truck">Машина, госномер</label><input id="rolis-f-truck" value="${esc(src.truck)}" placeholder="А123ВС178"></div>
+      <div class="field"><label for="rolis-f-driver">Водитель</label><input id="rolis-f-driver" value="${esc(src.driver)}"></div>
+      <div class="field"><label for="rolis-f-pickup">Дата вывоза</label><input type="date" id="rolis-f-pickup" value="${esc(toIsoDate(src.pickup_date))}"></div>
+    </div>
+    <h3>3. Обработка</h3>
+    <div class="row">
+      <div class="field"><label for="rolis-f-handling">Тип</label><select id="rolis-f-handling">${lifeSelectOptions(ROLIS_HANDLING_TYPES, src.handling_type, "—")}</select></div>
+      <div class="field wide"><label for="rolis-f-warehouse">Адрес склада</label><input id="rolis-f-warehouse" value="${esc(src.warehouse)}"></div>
+      <div class="field"><label for="rolis-f-hdate">Дата</label><input type="date" id="rolis-f-hdate" value="${esc(toIsoDate(src.handling_date))}"></div>
+    </div>
+    <h3>4. Возврат порожнего</h3>
+    <div class="row">
+      <div class="field"><label for="rolis-f-rterm">Терминал возврата</label><input id="rolis-f-rterm" value="${esc(src.return_terminal)}"></div>
+      <div class="field"><label for="rolis-f-rdead">Срок возврата</label><input type="date" id="rolis-f-rdead" value="${esc(toIsoDate(src.return_deadline))}"></div>
+      <div class="field"><label for="rolis-f-rdate">Фактическая дата</label><input type="date" id="rolis-f-rdate" value="${esc(toIsoDate(src.return_date))}"></div>
+    </div>
+    <h3>Стадия, кто везёт, стоимость</h3>
+    <div class="row">
+      <div class="field"><label for="rolis-f-stage">Стадия</label><select id="rolis-f-stage">${stageOpts}</select></div>
+      <div class="field"><label for="rolis-f-assignee">Кто везёт</label><input id="rolis-f-assignee" value="${esc(src.assignee)}"></div>
+      <div class="field"><label for="rolis-f-cost">Стоимость, ₽</label><input id="rolis-f-cost" inputmode="numeric" value="${esc(lifeField(src.cost))}" placeholder="125000"></div>
+      <div class="field check"><input type="checkbox" id="rolis-f-lock" ${src.stage_locked ? "checked" : ""}><label for="rolis-f-lock">Зафиксировать стадию вручную</label></div>
+    </div>
+    <p class="note">Сумма полными рублями, можно с пробелами: 125 000. Демо само не переписывает зафиксированную стадию.</p>
+    <div class="toolbar">
+      <button type="button" class="btn" data-life-act="save">Сохранить</button>
+      <button type="button" class="btn ghost" data-life-act="cancel">Отмена</button>
+      ${src.id ? `<button type="button" class="btn ghost" data-life-act="del" data-life-id="${esc(src.id)}" style="color:#b91c1c!important">Удалить</button>` : ""}
+    </div>
+  </div>`;
+}
+function renderRolisLifeSection() {
+  const demoOn = rolisDemoEnabled();
+  const filter = currentLifeFilter();
+  const q = window.__rolisLifeQ || "";
+  const filterOpts = `<option value="">Все стадии</option>` + ROLIS_LIFE_STAGES.map(s =>
+    `<option value="${s.id}" ${filter === s.id ? "selected" : ""}>${esc(s.title)}</option>`).join("");
+  const banner = demoOn
+    ? `<div class="rolis-demo-banner">ДЕМО · стадии сменяются сами, примерно каждые 30 секунд. «Дальше» и «Назад» фиксируют карточку.</div>`
+    : `<div class="rolis-demo-banner">Демо выключено. Показана сохранённая стадия, без автосмены.</div>`;
+  return `<div class="card" id="rolis-life">
+    <h2>Карточка контейнера</h2>
+    <p class="note">Учёт по системе РОЛИС: порт, вывоз, обработка, возврат порожнего. Карточки в том же общем хранилище, что и ручной статус. Старые статусы и заметки не меняются. Пока стадия не зафиксирована, демо её не записывает.</p>
+    ${banner}
+    <div class="toolbar">
+      <button type="button" class="btn" data-life-act="new">Новая карточка</button>
+      <div class="field" style="min-width:220px;flex:1.4;margin:0">
+        <label for="rolis-life-prefill">Из заявки</label>
+        <select id="rolis-life-prefill">${renderLifePrefillOptions()}</select>
+      </div>
+      <button type="button" class="btn secondary" data-life-act="from-z">Заполнить из заявки</button>
+    </div>
+    <div class="row">
+      <div class="field wide"><label for="rolis-life-q">Поиск</label>
+        <input id="rolis-life-q" type="search" value="${esc(q)}" placeholder="Номер контейнера или груз" autocomplete="off"></div>
+      <div class="field" style="max-width:240px"><label for="rolis-life-filter">Стадия</label>
+        <select id="rolis-life-filter">${filterOpts}</select></div>
+    </div>
+    ${renderLifeForm()}
+    <div id="rolis-life-list">${renderRolisLifeCards()}</div>
+  </div>`;
+}
+function readRolisLifeForm() {
+  const g = (id) => {
+    const el = document.getElementById(id);
+    return el ? el.value : "";
+  };
+  const lock = document.getElementById("rolis-f-lock");
+  const zid = g("rolis-f-zayavka");
+  return {
+    id: g("rolis-f-id"),
+    container: g("rolis-f-container"),
+    line: g("rolis-f-line"),
+    terminal: g("rolis-f-terminal"),
+    arrival_date: g("rolis-f-arrival"),
+    free_days: g("rolis-f-free"),
+    truck: g("rolis-f-truck"),
+    driver: g("rolis-f-driver"),
+    pickup_date: g("rolis-f-pickup"),
+    handling_type: g("rolis-f-handling"),
+    warehouse: g("rolis-f-warehouse"),
+    handling_date: g("rolis-f-hdate"),
+    return_terminal: g("rolis-f-rterm"),
+    return_deadline: g("rolis-f-rdead"),
+    return_date: g("rolis-f-rdate"),
+    stage: g("rolis-f-stage"),
+    stage_locked: !!(lock && lock.checked),
+    assignee: g("rolis-f-assignee"),
+    cost: g("rolis-f-cost"),
+    cargo: g("rolis-f-cargo"),
+    weight_kg: g("rolis-f-weight"),
+    hs_code: g("rolis-f-hs"),
+    cont_type: g("rolis-f-type"),
+    zayavka_id: zid === "" ? null : zid
+  };
+}
+function captureRolisLifeUi() {
+  const q = document.getElementById("rolis-life-q");
+  if (q) window.__rolisLifeQ = q.value || "";
+  const f = document.getElementById("rolis-life-filter");
+  if (f) window.__rolisLifeFilter = f.value || "";
+  if (document.getElementById("rolis-f-container")) window.__rolisLifeDraft = readRolisLifeForm();
+}
+function upsertRolisLifeCard(data) {
+  data = data || {};
+  const cost = parseCostInput(data.cost);
+  if (!cost.ok) { toast("Стоимость — число в рублях, например 125000"); return null; }
+  const free = parseNonNegInt(data.free_days);
+  if (!free.ok) { toast("Свободные дни — целое число от 0"); return null; }
+  const container = rolisNormCont(data.container);
+  const cargo = String(data.cargo || "").trim();
+  if (!container && !cargo) { toast("Укажите номер контейнера или груз"); return null; }
+  const store = ensureRolisStore();
+  const now = new Date().toISOString();
+  let card = data.id ? store.cards.find(c => c && String(c.id) === String(data.id)) : null;
+  if (!card) {
+    card = emptyLifeCard();
+    card.id = newLifeId();
+    card.created_at = now;
+    store.cards.unshift(card);
+  }
+  card.container = container;
+  card.line = String(data.line || "").trim();
+  card.terminal = String(data.terminal || "").trim();
+  card.arrival_date = toIsoDate(data.arrival_date);
+  card.free_days = free.value;
+  card.truck = String(data.truck || "").trim();
+  card.driver = String(data.driver || "").trim();
+  card.pickup_date = toIsoDate(data.pickup_date);
+  const handling = String(data.handling_type || "").trim();
+  if (!handling || ROLIS_HANDLING_TYPES.indexOf(handling) >= 0 || handling === card.handling_type) card.handling_type = handling;
+  card.warehouse = String(data.warehouse || "").trim();
+  card.handling_date = toIsoDate(data.handling_date);
+  card.return_terminal = String(data.return_terminal || "").trim();
+  card.return_deadline = toIsoDate(data.return_deadline);
+  card.return_date = toIsoDate(data.return_date);
+  card.stage = clampStage(data.stage);
+  card.stage_locked = !!data.stage_locked;
+  card.assignee = String(data.assignee || "").trim();
+  card.cost = cost.value;
+  card.cargo = cargo;
+  card.weight_kg = String(data.weight_kg || "").trim();
+  card.hs_code = String(data.hs_code || "").trim().slice(0, 32);
+  card.cont_type = ROLIS_CONT_TYPES.some(t => t.id === data.cont_type) ? data.cont_type : "";
+  if (data.zayavka_id != null && data.zayavka_id !== "") card.zayavka_id = data.zayavka_id;
+  card.updated_at = now;
+  if (!card.stage_locked) {
+    card.demo_anchor = now;
+    if (window.__rolisDemoNudge) delete window.__rolisDemoNudge[card.id];
+  } else if (!card.demo_anchor) {
+    card.demo_anchor = card.created_at || now;
+  }
+  saveStore(DB);
+  return card;
+}
+function moveRolisLifeStage(id, dir) {
+  const card = findLifeCard(id);
+  if (!card) return null;
+  const view = rolisCardView(card);
+  const next = clampStage(view.index + dir);
+  if (next === view.index) return card;
+  card.stage = next;
+  card.stage_locked = true;
+  card.updated_at = new Date().toISOString();
+  saveStore(DB);
+  return card;
+}
+function resumeRolisLifeDemo(id) {
+  const card = findLifeCard(id);
+  if (!card) return null;
+  const view = rolisCardView(card);
+  card.stage = view.index;
+  card.stage_locked = false;
+  card.demo_anchor = new Date().toISOString();
+  card.updated_at = card.demo_anchor;
+  if (window.__rolisDemoNudge) delete window.__rolisDemoNudge[card.id];
+  saveStore(DB);
+  return card;
+}
+function deleteRolisLifeCard(id) {
+  if (typeof confirm === "function" && !confirm("Удалить карточку контейнера?")) return;
+  const store = ensureRolisStore();
+  store.cards = store.cards.filter(c => !c || String(c.id) !== String(id));
+  saveStore(DB);
+  if (String(window.__rolisLifeEdit || "") === String(id)) {
+    window.__rolisLifeEdit = null;
+    window.__rolisLifeDraft = null;
+  }
+  window.__rolisLifeAnchor = "card";
+  showTab("rolis");
+  toast("Карточка удалена");
+}
+function scrollRolisLife() {
+  const mode = window.__rolisLifeAnchor || "";
+  window.__rolisLifeAnchor = "";
+  if (!mode) return;
+  const el = mode === "form"
+    ? (document.getElementById("rolis-life-form") || document.getElementById("rolis-life"))
+    : (document.querySelector(".rolis-life-card") || document.getElementById("rolis-life"));
+  if (el && el.scrollIntoView) {
+    try { el.scrollIntoView({ block: "start" }); } catch (e) {}
+  }
+}
+function beginLifeEdit(card) {
+  if (!card) return;
+  const view = rolisCardView(card);
+  const draft = Object.assign({}, card);
+  if (!card.stage_locked && (view.mode === "demo" || view.mode === "service")) draft.stage = view.index;
+  window.__rolisLifeEdit = card.id;
+  window.__rolisLifeDraft = draft;
+  window.__rolisLifeAnchor = "form";
+  showTab("rolis");
+}
+function createLifeFromRow(row) {
+  if (!row) return;
+  const cont = rolisNormCont(row.container);
+  const existing = rolisCards().find(c => String(c.zayavka_id) === String(row.zayavkaId) && rolisNormCont(c.container) === cont);
+  if (existing) {
+    beginLifeEdit(existing);
+    toast("Карточка этого контейнера уже есть");
+    return;
+  }
+  const card = cardFromRolisRow(row);
+  if (!card.container && !String(card.cargo || "").trim()) {
+    window.__rolisLifeEdit = "new";
+    window.__rolisLifeDraft = card;
+    showTab("rolis");
+    toast("В заявке нет номера и груза — заполните карточку");
+    return;
+  }
+  card.id = newLifeId();
+  ensureRolisStore().cards.unshift(card);
+  saveStore(DB);
+  beginLifeEdit(card);
+  toast("Карточка создана из заявки");
+}
+function createLifeFromSelect() {
+  const sel = document.getElementById("rolis-life-prefill");
+  if (!sel || sel.value === "") { toast("Выберите контейнер из заявки"); return; }
+  const idx = Number(sel.value);
+  const row = buildRolisRows()[idx];
+  if (!row) { toast("Заявка не найдена"); return; }
+  createLifeFromRow(row);
+}
+function nudgeRolisDemoStages() {
+  if (!window.__rolisDemoNudge) window.__rolisDemoNudge = {};
+  for (const card of rolisCards()) {
+    if (card.stage_locked) continue;
+    const view = rolisCardView(card);
+    if (view.mode !== "demo" || view.index >= ROLIS_LIFE_STAGES.length - 1) continue;
+    window.__rolisDemoNudge[card.id] = (window.__rolisDemoNudge[card.id] || 0) + ROLIS_DEMO_STEP_MS;
+  }
+}
+/**
+ * Хук официального веб-сервиса РОЛИС (SOAP).
+ * Сейчас сеть не вызывается и страницы портала не читаются.
+ * Позже по номеру контейнера верните стадию, например
+ *   { connected: true, stage: "port" | "pickup" | "handling" | "return" | "closed" }
+ * Если карточку не зафиксировали вручную, эта стадия появится на ней вместо демо.
+ * Не заменяйте тело разбором сайта РОЛИС.
+ */
+async function rolisFetchStatus(containerNumber, card) {
+  return {
+    connected: false,
+    source: "unconfigured",
+    container: String(containerNumber || "")
+  };
+}
+window.rolisFetchStatus = rolisFetchStatus;
+async function rolisPullServiceStages() {
+  const fn = window.rolisFetchStatus;
+  if (typeof fn !== "function") return false;
+  if (!window.__rolisServiceStage) window.__rolisServiceStage = {};
+  let changed = false;
+  for (const card of rolisCards()) {
+    if (!card.id || card.stage_locked) continue;
+    let res = null;
+    try { res = await fn(card.container, card); } catch (e) { res = null; }
+    if (res && res.connected && res.stage != null && res.stage !== "") {
+      const idx = rolisStageIndex(res.stage);
+      if (idx >= 0) {
+        const prev = window.__rolisServiceStage[card.id];
+        window.__rolisServiceStage[card.id] = { stage: idx, source: "rolis" };
+        if (!prev || prev.stage !== idx) changed = true;
+        continue;
+      }
+    }
+    if (window.__rolisServiceStage[card.id]) {
+      delete window.__rolisServiceStage[card.id];
+      changed = true;
+    }
+  }
+  return changed;
+}
+function rolisLifeTick() {
+  if (currentTab !== "rolis" || !rolisDemoEnabled()) return;
+  const root = document.getElementById("rolis-life-list");
+  if (!root || !root.querySelectorAll) return;
+  const filter = currentLifeFilter();
+  const q = (document.getElementById("rolis-life-q") || {}).value;
+  if (q != null && document.getElementById("rolis-life-q")) window.__rolisLifeQ = q;
+  const want = rolisCards().filter(c => c.id && lifeMatchesQuery(c, window.__rolisLifeQ || "") && (!filter || rolisCardView(c).id === filter));
+  const shown = root.querySelectorAll("[data-life-id]");
+  let structural = shown.length !== want.length;
+  if (!structural) {
+    for (const card of want) {
+      const el = root.querySelector('[data-life-id="' + String(card.id).replace(/[^a-z0-9]/gi, "") + '"]');
+      if (!el) { structural = true; break; }
+      const view = rolisCardView(card);
+      if (el.getAttribute("data-stage-now") !== String(view.index) || el.getAttribute("data-stage-mode") !== view.mode) {
+        structural = true;
+        break;
+      }
+      const eta = el.querySelector("[data-life-eta]");
+      if (eta) eta.textContent = view.eta;
+    }
+  }
+  if (structural) root.innerHTML = renderRolisLifeCards();
+}
+function onRolisLifeClick(e) {
+  const t = e.target && e.target.closest ? e.target.closest("[data-life-act]") : null;
+  if (!t || t.disabled) return;
+  const act = t.getAttribute("data-life-act");
+  const id = t.getAttribute("data-life-id") || "";
+  if (act === "new") {
+    window.__rolisLifeEdit = "new";
+    window.__rolisLifeDraft = emptyLifeCard();
+    window.__rolisLifeAnchor = "form";
+    showTab("rolis");
+    return;
+  }
+  if (act === "from-z") { createLifeFromSelect(); return; }
+  if (act === "cancel") {
+    window.__rolisLifeEdit = null;
+    window.__rolisLifeDraft = null;
+    window.__rolisLifeAnchor = "card";
+    showTab("rolis");
+    return;
+  }
+  if (act === "save") {
+    const card = upsertRolisLifeCard(readRolisLifeForm());
+    if (!card) return;
+    window.__rolisLifeEdit = card.id;
+    window.__rolisLifeDraft = Object.assign({}, card);
+    window.__rolisLifeAnchor = "form";
+    showTab("rolis");
+    toast("Карточка сохранена");
+    return;
+  }
+  if (act === "edit") {
+    const card = findLifeCard(id);
+    if (card) beginLifeEdit(card);
+    return;
+  }
+  if (act === "prev" || act === "next") {
+    moveRolisLifeStage(id, act === "next" ? 1 : -1);
+    if (document.getElementById("rolis-f-container")) captureRolisLifeUi();
+    window.__rolisLifeAnchor = "card";
+    showTab("rolis");
+    toast("Стадия зафиксирована");
+    return;
+  }
+  if (act === "demo") {
+    resumeRolisLifeDemo(id);
+    if (document.getElementById("rolis-f-container")) captureRolisLifeUi();
+    window.__rolisLifeAnchor = "card";
+    showTab("rolis");
+    toast("Снова демо: стадия пойдёт сама");
+    return;
+  }
+  if (act === "del") deleteRolisLifeCard(id);
+}
+function bindRolisLife() {
+  const root = document.getElementById("rolis-life");
+  if (!root || root.__lifeBound) return;
+  root.__lifeBound = true;
+  root.addEventListener("click", onRolisLifeClick);
+  const q = document.getElementById("rolis-life-q");
+  if (q) q.addEventListener("input", () => {
+    window.__rolisLifeQ = q.value || "";
+    const list = document.getElementById("rolis-life-list");
+    if (list) list.innerHTML = renderRolisLifeCards();
+  });
+  const filter = document.getElementById("rolis-life-filter");
+  if (filter) filter.addEventListener("change", () => {
+    window.__rolisLifeFilter = filter.value || "";
+    const list = document.getElementById("rolis-life-list");
+    if (list) list.innerHTML = renderRolisLifeCards();
+  });
+  if (window.__rolisLifeTimer) clearInterval(window.__rolisLifeTimer);
+  window.__rolisLifeTimer = setInterval(rolisLifeTick, 1000);
+  rolisPullServiceStages().then(changed => {
+    if (!changed || currentTab !== "rolis") return;
+    const list = document.getElementById("rolis-life-list");
+    if (!list) return;
+    list.innerHTML = renderRolisLifeCards();
+  }).catch(() => {});
+}
+
+
 function renderRolis() {
   ensureRolisStore();
   const rows = buildRolisRows();
@@ -3199,6 +4007,7 @@ function renderRolis() {
         <td class="rolis-actions">
           <button type="button" class="btn small" data-rolis-copy-num="${i}" ${hasCont ? "" : "disabled"}>Копировать №</button>
           <button type="button" class="btn small secondary" data-rolis-copy-visit="${i}">Для визита</button>
+          <button type="button" class="btn small" data-rolis-life="${i}">Карточка</button>
         </td>
       </tr>`;
     }
@@ -3219,6 +4028,8 @@ function renderRolis() {
       <div class="rolis-muted">Терминалы: ПКТ, Петролеспорт, УЛКТ, НУТЭП, Янино и др.</div>
     </div>
   </div>
+
+  ${renderRolisLifeSection()}
 
   <div class="card">
     <h2>Мои контейнеры</h2>
@@ -3253,16 +4064,16 @@ function renderRolis() {
   <div class="card">
     <h2>Автоматические статусы</h2>
     <div class="rolis-demo-banner">Демо-режим: примерные данные, не из РОЛИС</div>
-    <p class="note">Имитация статуса по номеру контейнера. Не живые данные РОЛИС и не перезаписывает поле «Статус в РОЛИС». В облако не пишется.</p>
+    <p class="note">Имитация статуса по номеру контейнера и автосмена стадий на карточках. Не живые данные РОЛИС и не перезаписывает поле «Статус в РОЛИС». Демо-стадия карточки в облако не пишется, пока её не зафиксировали вручную.</p>
     <div class="toolbar">
       <button type="button" class="btn" id="rolis-demo-refresh">Обновить статусы (демо)</button>
-      <button type="button" class="btn ghost" id="rolis-demo-toggle">${demoOn ? "Скрыть демо-столбец" : "Показать демо-статусы"}</button>
+      <button type="button" class="btn ghost" id="rolis-demo-toggle">${demoOn ? "Скрыть демо" : "Показать демо"}</button>
     </div>
     <div class="rolis-connect">
       <label style="display:flex;gap:8px;align-items:flex-start">
         <input type="checkbox" id="rolis-real-connect" disabled>
         <span><strong>Подключить настоящий РОЛИС</strong><br>
-        <span class="rolis-muted">Официальный веб-сервис настроит ассистент позже. Пока только демо.</span></span>
+        <span class="rolis-muted">Официальный веб-сервис (SOAP) подключится позже и выставит стадии. Пока только демо, сайт РОЛИС отсюда не читается.</span></span>
       </label>
     </div>
   </div>`;
@@ -3287,6 +4098,14 @@ function bindRolisHandlers() {
       copyTextRolis(formatVisitClipboard(row), "Данные для визита скопированы");
     };
   });
+  document.querySelectorAll("[data-rolis-life]").forEach(btn => {
+    btn.onclick = () => {
+      const i = Number(btn.getAttribute("data-rolis-life"));
+      const row = (window.__rolisRowsCache || [])[i];
+      if (!row) return;
+      createLifeFromRow(row);
+    };
+  });
 
   const persist = (el) => {
     const zid = Number(el.getAttribute("data-zid"));
@@ -3307,14 +4126,16 @@ function bindRolisHandlers() {
 
   const refresh = document.getElementById("rolis-demo-refresh");
   if (refresh) refresh.onclick = () => {
+    captureRolisLifeUi();
     window.__rolisDemoOn = true;
-    // bump demo salt visually without saving — re-render with same deterministic values
-    // (hash is stable; toast confirms refresh)
+    nudgeRolisDemoStages();
     showTab("rolis");
-    toast("Демо-статусы обновлены (примерные)");
+    rolisPullServiceStages().catch(() => {});
+    toast("Демо-статусы обновлены, стадии карточек сдвинуты");
   };
   const tog = document.getElementById("rolis-demo-toggle");
   if (tog) tog.onclick = () => {
+    captureRolisLifeUi();
     window.__rolisDemoOn = !window.__rolisDemoOn;
     showTab("rolis");
   };
@@ -3325,6 +4146,8 @@ function bindRolisHandlers() {
       toast("Подключение настоящего РОЛИС настроит ассистент");
     };
   }
+  bindRolisLife();
+  scrollRolisLife();
 }
 
 
@@ -4683,8 +5506,9 @@ async function pullStoreFromCloud(opts) {
     if (!DB.mail_feed) DB.mail_feed = [];
     if (!DB.mail_seen) DB.mail_seen = [];
     if (!DB.quotes_extra) DB.quotes_extra = [];
-    if (!DB.rolis) DB.rolis = { byKey: {} };
+    if (!DB.rolis) DB.rolis = { byKey: {}, cards: [] };
     if (!DB.rolis.byKey) DB.rolis.byKey = {};
+    if (!Array.isArray(DB.rolis.cards)) DB.rolis.cards = [];
     try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch (e) {}
     try { applyVersionedImports(); } catch (e) {}
     if (opts.rerender !== false) {
@@ -4713,6 +5537,9 @@ function subscribeStoreRealtime() {
       DB = row.value;
       if (!DB.deleted_mail) DB.deleted_mail = [];
       if (!DB.mail_feed) DB.mail_feed = [];
+      if (!DB.rolis || typeof DB.rolis !== "object") DB.rolis = { byKey: {}, cards: [] };
+      if (!DB.rolis.byKey) DB.rolis.byKey = {};
+      if (!Array.isArray(DB.rolis.cards)) DB.rolis.cards = [];
       try { localStorage.setItem(STORE_KEY, JSON.stringify(DB)); } catch (e) {}
       try { showTab(currentTab || "pochta"); } catch (e) {}
       try { toast("Данные обновлены с облака"); } catch (e) {}

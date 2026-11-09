@@ -1,7 +1,7 @@
 {
-  "version": "1.1.9",
-  "released_at": "2026-11-09T18:05:00Z",
-  "notes": "1.1.9: ИИ-помощник Грайл",
+  "version": "1.2.0",
+  "released_at": "2026-11-09T18:50:00Z",
+  "notes": "1.2.0: карточка контейнера в РОЛИС + ИИ-помощник Грайл",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -18,10 +18,10 @@
     ]
   },
   "code": {
-    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@8a809ab34efa04a814f9aaf2f1d63dfab45c64d4/updates/app.js",
-    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@8a809ab34efa04a814f9aaf2f1d63dfab45c64d4/updates/app.css",
-    "js_sha256": "5880745a3edf7432c957cf2ed8d7b21a42aa8cdb0a09f7b62860b2ada00ee0f1",
-    "css_sha256": "36cc65dbcd46b0be5bd2d801bc33ffb393c0ec18452eacd7fa3962260d7c1f31"
+    "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@732c9df71e9e37192ac91dc66fdd809b435b95a8/updates/app.js",
+    "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@732c9df71e9e37192ac91dc66fdd809b435b95a8/updates/app.css",
+    "js_sha256": "fd9e06a7acb3e7307f85c7a9b6c18c649fb17b6f20c98f6651fb528748b15570",
+    "css_sha256": "26e7bb68aee524538074aff7d1cef4c478f85d9183a04073fd2920d64cc81b5f"
   },
   "data": {
     "quotes_url": "quotes_public.json",
