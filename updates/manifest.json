@@ -1,7 +1,7 @@
 {
-  "version": "1.1.8",
-  "released_at": "2026-11-09T16:45:00Z",
-  "notes": "1.1.8: подбор ставки по точному маршруту, типу контейнера, весу и сдаче порожнего. Близкие направления без формулы по километражу. Без персональных данных.",
+  "version": "1.2.0",
+  "released_at": "2026-11-09T18:40:00Z",
+  "notes": "1.2.0: карточка контейнера: порт, вывоз, перетарка, возврат порожнего",
   "min_app": "1.0",
   "privacy": {
     "public": [
@@ -20,8 +20,8 @@
   "code": {
     "js_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@ac42f919b95eb7708ccc6b94d3d4904ad74b7a33/updates/app.js",
     "css_url": "https://cdn.jsdelivr.net/gh/kasianov992-debug/kasyanov-app-updates@ac42f919b95eb7708ccc6b94d3d4904ad74b7a33/updates/app.css",
-    "js_sha256": "b8afcb113d1c954054ba1c78e9b0cf2e0c8b5a96ac0883fd0944771a64b5eb82",
-    "css_sha256": "1d29c282061ba2b4332197ebda6ee5a13cc224942cb797f1943c735627b93b13"
+    "js_sha256": "3aec86035782fb43e5748c979116cc99301639ea4bd831e219a82b1d5fe30fd5",
+    "css_sha256": "a9157b27cec81cf663041639a28e023cd71bd609349de06a452cf09cb042b680"
   },
   "data": {
     "quotes_url": "quotes_public.json",
